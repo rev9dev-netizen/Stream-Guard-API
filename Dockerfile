@@ -47,11 +47,11 @@ COPY . .
 # Build TypeScript to JavaScript
 RUN pnpm run build
 
-# Verify lib folder exists
-RUN ls -la lib/server/ || echo "ERROR: lib/server not found!"
+# Debug: Show what was built
+RUN echo "=== Build output ===" && ls -R lib/
 
 # Expose port
 EXPOSE 3000
 
-# Start server using compiled version
-CMD ["node", "lib/server/index.js"]
+# Start server - use vite-node as fallback since tsc output structure is different
+CMD ["pnpm", "start:server:dev"]
