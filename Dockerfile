@@ -38,7 +38,7 @@ WORKDIR /app
 # Copy package files
 COPY package.json pnpm-lock.yaml ./
 
-# Install dependencies
+# Install ALL dependencies (including devDependencies for build)
 RUN pnpm install --frozen-lockfile
 
 # Copy source code
@@ -46,6 +46,9 @@ COPY . .
 
 # Build TypeScript to JavaScript
 RUN pnpm run build
+
+# Remove devDependencies to reduce image size (optional)
+RUN pnpm prune --prod
 
 # Expose port
 EXPOSE 3000
