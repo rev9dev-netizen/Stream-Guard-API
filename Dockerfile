@@ -47,8 +47,8 @@ COPY . .
 # Build TypeScript to JavaScript
 RUN pnpm run build
 
-# Remove devDependencies to reduce image size (optional)
-RUN pnpm prune --prod
+# Verify lib folder exists
+RUN ls -la lib/server/ || echo "ERROR: lib/server not found!"
 
 # Expose port
 EXPOSE 3000
