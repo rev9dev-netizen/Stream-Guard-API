@@ -3,7 +3,7 @@
     "target": "es2021",
     "lib": ["es2021", "DOM"],
     "module": "ESNext",
-    "moduleResolution": "Bundler",
+    "moduleResolution": "Node",
     "esModuleInterop": true,
     "declaration": true,
     "outDir": "./lib",

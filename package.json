@@ -35,8 +35,8 @@
   },
   "homepage": "https://vidninja.github.io/providers/",
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
+    "build": "tsc && tsc-alias",
+    "dev": "tsc --watch",
     "start:server": "node lib/server/index.js",
     "start:server:dev": "vite-node src/server/index.ts",
     "cli": "vite-node ./src/dev-cli/index.ts",
