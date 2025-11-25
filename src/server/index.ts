@@ -21,6 +21,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY;
 
+// Trust proxy - REQUIRED when behind reverse proxy (Koyeb, Cloudflare, etc.)
+// This allows Express to correctly identify client IPs from X-Forwarded-For header
+app.set('trust proxy', 1);
+
 app.use(cors());
 app.use(express.json());
 

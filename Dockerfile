@@ -29,6 +29,12 @@ RUN apt-get update && apt-get install -y \
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
+# Puppeteer memory optimizations (reduces memory by ~100-150MB)
+ENV PUPPETEER_ARGS='--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu'
+
+# Node memory limit for 512MB instances (leaves room for Chromium)
+ENV NODE_OPTIONS='--max-old-space-size=350'
+
 # Install pnpm
 RUN npm install -g pnpm
 
