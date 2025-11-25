@@ -1,0 +1,47 @@
+# Node modules
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+coverage/
+.nyc_output/
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+.cache/
+
+# Documentation artifacts (keep in repo)
+!README.md
+!API_DOCUMENTATION.md
+!SECURITY.md
+!CLOUDFLARE_TURNSTILE_SETUP.md
+!ULTRA_SECURE_STREAMS.md
+!KOYEB_DEPLOYMENT.md
