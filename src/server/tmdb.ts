@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+
 
 const TMDB_API_KEY = process.env.MOVIE_WEB_TMDB_API_KEY || process.env.TMDB_READ_API_KEY;
 

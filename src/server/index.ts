@@ -1,10 +1,11 @@
+import { Readable } from 'stream';
+
 import cors from 'cors';
 import dotenv from 'dotenv';
 /* eslint-disable no-console */
 import express, { NextFunction, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import slowDown from 'express-slow-down';
-import nodeFetch from 'node-fetch';
 
 import { getBuiltinEmbeds, getBuiltinExternalSources, getBuiltinSources } from '../index.js';
 import { segmentRateLimiter } from './rate-limiter.js';
@@ -316,7 +317,7 @@ app.get('/s/:token', validateDomain, async (req: Request, res: Response) => {
     }
 
     // Fetch the master playlist
-    const response = await nodeFetch(metadata.url, {
+    const response = await fetch(metadata.url, {
       headers: metadata.headers,
     });
 
@@ -392,7 +393,7 @@ app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, re
     const segmentUrl = segmentData.url;
 
     // Fetch the segment with proper headers
-    const response = await nodeFetch(segmentUrl, {
+    const response = await fetch(segmentUrl, {
       headers: metadata.headers,
     });
 
@@ -431,7 +432,7 @@ app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, re
       }
 
       if (response.body) {
-        response.body.pipe(res as any);
+        Readable.fromWeb(response.body as any).pipe(res);
       }
     }
   } catch (error: any) {
