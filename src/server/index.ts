@@ -11,7 +11,7 @@ import { getBuiltinEmbeds, getBuiltinExternalSources, getBuiltinSources } from '
 import { startHealthCheckLoop } from './health-check.js';
 import { segmentRateLimiter } from './rate-limiter.js';
 import { generateCacheKey, getAllProviderHealth, getCachedStream, setCachedStream } from './redis.js';
-import { getStats, updateProviderStats } from './stats.js';
+import { updateProviderStats } from './stats.js';
 import { encryptPlaylistContent, generateStreamToken, getStreamMetadata } from './stream-proxy.js';
 import { turnstileMiddleware } from './turnstile.js';
 import { runActualScraping } from '../dev-cli/scraper.js';
