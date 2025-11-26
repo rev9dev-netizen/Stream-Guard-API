@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 import slowDown from 'express-slow-down';
 import nodeFetch from 'node-fetch';
 
-import { getBuiltinEmbeds, getBuiltinExternalSources, getBuiltinSources } from '..';
+import { getBuiltinEmbeds, getBuiltinExternalSources, getBuiltinSources } from '../index.js';
 import { segmentRateLimiter } from './rate-limiter';
 import { generateCacheKey, getCachedStream, setCachedStream } from './redis';
 import { getStats, updateProviderStats } from './stats';
