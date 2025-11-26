@@ -1,6 +1,5 @@
 // import { alphaScraper, deltaScraper } from '@/providers/embeds/nsbx';
 // import { astraScraper, novaScraper, orionScraper } from '@/providers/embeds/whvx';
-import { bombtheirishScraper } from '@/providers/archive/sources/bombtheirish';
 import { warezcdnembedMp4Scraper } from '@/providers/embeds/warezcdn/mp4';
 import { Stream } from '@/providers/streams';
 import { IndividualEmbedRunnerOptions } from '@/runners/individualRunner';
@@ -14,11 +13,6 @@ const SKIP_VALIDATION_CHECK_IDS = [
   // novaScraper.id,
   // astraScraper.id,
   // orionScraper.id,
-];
-
-const UNPROXIED_VALIDATION_CHECK_IDS = [
-  // sources here are always proxied, so we dont need to validate with a proxy
-  bombtheirishScraper.id, // this one is dead, but i'll keep it here for now
 ];
 
 export function isValidStream(stream: Stream | undefined): boolean {
@@ -52,7 +46,7 @@ export async function validatePlayableStream(
 ): Promise<Stream | null> {
   if (SKIP_VALIDATION_CHECK_IDS.includes(sourcererId)) return stream;
 
-  const alwaysUseNormalFetch = UNPROXIED_VALIDATION_CHECK_IDS.includes(sourcererId);
+  const alwaysUseNormalFetch = false; // All sources use proxied validation
 
   if (stream.type === 'hls') {
     // dirty temp fix for base64 urls to prep for fmhy poll

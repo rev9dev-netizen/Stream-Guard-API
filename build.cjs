@@ -9,6 +9,22 @@ esbuild.build({
   format: 'esm',
   outfile: 'dist/server.js',
   external: [
+    // Node.js built-ins
+    'crypto',
+    'zlib',
+    'readline',
+    'fs',
+    'path',
+    'url',
+    'http',
+    'https',
+    'stream',
+    'util',
+    'events',
+    'buffer',
+    'querystring',
+    'os',
+    // NPM packages
     '@upstash/redis',
     'express',
     'cors',

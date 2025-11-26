@@ -15,14 +15,9 @@ RUN pnpm install --frozen-lockfile
 # Copy source code
 COPY . .
 
-# Build TypeScript to JavaScript using esbuild (super fast)
-RUN pnpm build:fast
-
-# Debug: Show what was built
-RUN echo "=== Build output ===" && ls -la dist/
-
 # Expose port
-EXPOSE 3000
+EXPOSE 8000
 
-# Start server - use compiled bundle
-CMD ["pnpm", "start:server"]
+# Use vite-node for deployment (works on free tier)
+# Accepts 30s startup time but runs reliably
+CMD ["pnpm", "start:server:dev"]
