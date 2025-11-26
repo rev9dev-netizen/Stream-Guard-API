@@ -8,8 +8,9 @@ import rateLimit from 'express-rate-limit';
 import slowDown from 'express-slow-down';
 
 import { getBuiltinEmbeds, getBuiltinExternalSources, getBuiltinSources } from '../index.js';
+import { startHealthCheckLoop } from './health-check.js';
 import { segmentRateLimiter } from './rate-limiter.js';
-import { generateCacheKey, getCachedStream, setCachedStream } from './redis.js';
+import { generateCacheKey, getAllProviderHealth, getCachedStream, setCachedStream } from './redis.js';
 import { getStats, updateProviderStats } from './stats.js';
 import { encryptPlaylistContent, generateStreamToken, getStreamMetadata } from './stream-proxy.js';
 import { turnstileMiddleware } from './turnstile.js';
@@ -158,24 +159,25 @@ app.get('/sources', authMiddleware, (req: Request, res: Response) => {
   res.json(sourceList);
 });
 
-app.get('/status', (req: Request, res: Response) => {
-  const stats = getStats();
-  const result: Record<string, { status: string; responseTime: number; uptime: number }> = {};
+app.get('/status', async (req: Request, res: Response) => {
+  const healthData = await getAllProviderHealth();
+  const result: Record<string, any> = {};
 
   // Get all source providers (not embeds)
   const sourceProviders = sources.filter((s) => s.type === 'source');
 
   // Add all source providers to the result
   for (const provider of sourceProviders) {
-    if (stats[provider.id]) {
+    if (healthData[provider.id]) {
       // Provider has been tested
-      result[provider.id] = stats[provider.id];
+      result[provider.id] = healthData[provider.id];
     } else {
       // Provider hasn't been tested yet
       result[provider.id] = {
         status: 'untested',
-        responseTime: 0,
-        uptime: 0,
+        latency: 0,
+        lastChecked: 0,
+        error: null,
       };
     }
   }
@@ -447,6 +449,9 @@ app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, re
     res.status(500).send('Error');
   }
 });
+
+// Start health check loop
+startHealthCheckLoop();
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

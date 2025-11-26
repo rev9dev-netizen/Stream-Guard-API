@@ -78,3 +78,45 @@ export function generateCacheKey(
 ): string {
   return `stream:${sourceId}:${tmdbId}:${type}:${season || '0'}:${episode || '0'}`;
 }
+
+// Health Check Storage
+export async function saveProviderHealth(sourceId: string, data: any): Promise<void> {
+  if (!redis) return;
+  try {
+    await redis.hset('provider:health', { [sourceId]: JSON.stringify(data) });
+  } catch (error) {
+    console.error('Redis health save error:', error);
+  }
+}
+
+export async function getProviderHealth(sourceId: string): Promise<any | null> {
+  if (!redis) return null;
+  try {
+    const data = await redis.hget('provider:health', sourceId);
+    return data ? JSON.parse(data as string) : null;
+  } catch (error) {
+    console.error('Redis health get error:', error);
+    return null;
+  }
+}
+
+export async function getAllProviderHealth(): Promise<Record<string, any>> {
+  if (!redis) return {};
+  try {
+    const data = await redis.hgetall('provider:health');
+    if (!data) return {};
+    
+    const result: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      try {
+        result[key] = JSON.parse(value as string);
+      } catch (e) {
+        result[key] = value;
+      }
+    }
+    return result;
+  } catch (error) {
+    console.error('Redis all health get error:', error);
+    return {};
+  }
+}
