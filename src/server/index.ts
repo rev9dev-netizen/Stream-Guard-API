@@ -7,13 +7,13 @@ import slowDown from 'express-slow-down';
 import nodeFetch from 'node-fetch';
 
 import { getBuiltinEmbeds, getBuiltinExternalSources, getBuiltinSources } from '../index.js';
-import { segmentRateLimiter } from './rate-limiter';
-import { generateCacheKey, getCachedStream, setCachedStream } from './redis';
-import { getStats, updateProviderStats } from './stats';
-import { encryptPlaylistContent, generateStreamToken, getStreamMetadata } from './stream-proxy';
-import { turnstileMiddleware } from './turnstile';
-import { runActualScraping } from '../dev-cli/scraper';
-import { processOptions } from '../dev-cli/validate';
+import { segmentRateLimiter } from './rate-limiter.js';
+import { generateCacheKey, getCachedStream, setCachedStream } from './redis.js';
+import { getStats, updateProviderStats } from './stats.js';
+import { encryptPlaylistContent, generateStreamToken, getStreamMetadata } from './stream-proxy.js';
+import { turnstileMiddleware } from './turnstile.js';
+import { runActualScraping } from '../dev-cli/scraper.js';
+import { processOptions } from '../dev-cli/validate.js';
 
 dotenv.config();
 
