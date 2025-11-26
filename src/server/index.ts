@@ -213,15 +213,22 @@ app.get('/cdn', authMiddleware, scrapingLimiter, turnstileMiddleware, async (req
         // Generate FRESH tokens even for cached results
         const proxiedResult = {
           ...cached,
-          stream: cached.stream?.map((stream: any) => {
-            // NEW token for each request with IP/UA binding
-            const token = generateStreamToken(stream.playlist, stream.headers || {}, req.ip, req.get('user-agent'));
-            return {
-              ...stream,
-              playlist: `${req.protocol}://${req.get('host')}/s/${token}`,
-              headers: {},
-            };
-          }),
+          stream: await Promise.all(
+            (cached.stream || []).map(async (stream: any) => {
+              // NEW token for each request with IP/UA binding
+              const token = await generateStreamToken(
+                stream.playlist,
+                stream.headers || {},
+                req.ip,
+                req.get('user-agent'),
+              );
+              return {
+                ...stream,
+                playlist: `${req.protocol}://${req.get('host')}/s/${token}`,
+                headers: {},
+              };
+            }),
+          ),
         };
 
         return res.json(proxiedResult);
