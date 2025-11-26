@@ -8,6 +8,7 @@ import nodeFetch from 'node-fetch';
 
 import { runActualScraping } from '@/dev-cli/scraper';
 import { processOptions } from '@/dev-cli/validate';
+import { segmentRateLimiter } from '@/server/rate-limiter';
 import { getStats, updateProviderStats } from '@/server/stats';
 import { encryptPlaylistContent, generateStreamToken, getStreamMetadata } from '@/server/stream-proxy';
 import { turnstileMiddleware } from '@/server/turnstile';
@@ -95,8 +96,13 @@ function validateDomain(req: Request, res: Response, next: () => void) {
   const referer = req.get('referer') || req.get('origin') || '';
   const host = req.get('host') || '';
 
+  // Allow localhost in development
+  if (host.includes('localhost') || host.includes('127.0.0.1')) {
+    return next();
+  }
+
   // Allow requests from same host (for test page)
-  if (referer.includes(host)) {
+  if (referer && referer.includes(host)) {
     return next();
   }
 
@@ -104,13 +110,18 @@ function validateDomain(req: Request, res: Response, next: () => void) {
   const isAllowed = ALLOWED_DOMAINS.some((domain) => referer.includes(domain) || referer.includes(`://${domain}`));
 
   if (!isAllowed && referer) {
-    console.log(`[BLOCKED] Unauthorized domain access attempt from: ${referer}`);
+    console.log(`[BLOCKED] Unauthorized domain access attempt from: ${referer} (host: ${host})`);
     return res.status(403).send('Access denied');
   }
 
-  // Block direct access (no referer)
+  // In development, allow requests without referer from localhost
+  if (!referer && (host.includes('localhost') || host.includes('127.0.0.1'))) {
+    return next();
+  }
+
+  // Block direct access (no referer) in production
   if (!referer) {
-    console.log(`[BLOCKED] Direct URL access attempt from IP: ${req.ip}`);
+    console.log(`[BLOCKED] Direct URL access attempt from IP: ${req.ip}, host: ${host}`);
     return res.status(403).send('Access denied');
   }
 
@@ -301,6 +312,16 @@ app.get('/s/:token', validateDomain, async (req: Request, res: Response) => {
 
     const content = await response.text();
 
+    console.log('[STREAM PROXY] Original playlist URL:', metadata.url);
+    console.log('[STREAM PROXY] Original playlist length:', content.length);
+
+    // Extract available qualities from master playlist
+    const qualityRegex = /RESOLUTION=(\d+x\d+)/g;
+    const qualities = Array.from(content.matchAll(qualityRegex)).map((m) => m[1]);
+    if (qualities.length > 0) {
+      console.log('[STREAM PROXY] Available qualities:', qualities.join(', '));
+    }
+
     // Process the playlist to replace URLs with proxied versions
     // Pass IP and UA for segment token binding
     const baseUrl = `${req.protocol}://${req.get('host')}`;
@@ -315,27 +336,42 @@ app.get('/s/:token', validateDomain, async (req: Request, res: Response) => {
   }
 });
 
-// Segment proxy endpoint (opaque format) - PROTECTED with IP/UA binding and one-time use
+// Segment proxy endpoint (opaque format) - PROTECTED with IP/UA binding and rate limiting
 app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, res: Response) => {
   try {
     const { token, segmentToken } = req.params;
     const ip = req.ip || '';
     const userAgent = req.get('user-agent') || '';
 
-    // Validate master token first
+    // Check for download tools
+    if (segmentRateLimiter.detectDownloadTool(userAgent)) {
+      console.log(`[SECURITY] Download tool detected: ${userAgent.substring(0, 100)} from IP: ${ip}`);
+      return res.status(403).send('Download tools are not permitted');
+    }
+
+    // Rate limit check
+    const rateLimitResult = await segmentRateLimiter.checkRateLimit(token, ip);
+    if (!rateLimitResult.allowed) {
+      console.log(`[RATE LIMIT] Blocked ${ip} - ${rateLimitResult.reason}`);
+      return res.status(429).send(rateLimitResult.reason || 'Too many requests');
+    }
+
+    // Validate master token
     const metadata = await getStreamMetadata(token, ip, userAgent);
 
     if (!metadata) {
       return res.status(404).send('Not found');
     }
 
-    // Get and validate segment URL with IP/UA binding and one-time use
-    const { getSegmentMetadata } = await import('./stream-proxy');
-    const segmentUrl = await getSegmentMetadata(token, segmentToken, ip, userAgent);
+    // Verify signed segment token (no Redis lookup!)
+    const { verifySignedSegmentToken } = await import('./stream-proxy');
+    const segmentData = verifySignedSegmentToken(segmentToken, token);
 
-    if (!segmentUrl) {
+    if (!segmentData) {
       return res.status(404).send('Not found');
     }
+
+    const segmentUrl = segmentData.url;
 
     // Fetch the segment with proper headers
     const response = await nodeFetch(segmentUrl, {
@@ -346,12 +382,29 @@ app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, re
       return res.status(response.status).send('Failed');
     }
 
-    // Stream the segment
-    res.setHeader('Content-Type', response.headers.get('content-type') || 'video/mp2t');
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const contentType = response.headers.get('content-type') || '';
 
-    if (response.body) {
-      response.body.pipe(res as any);
+    // Check if this is a sub-playlist (variant m3u8) that needs URL rewriting
+    const isPlaylist = contentType.includes('mpegurl') || contentType.includes('m3u8') || segmentUrl.includes('.m3u8');
+
+    if (isPlaylist) {
+      // This is a sub-playlist, rewrite its URLs
+      const content = await response.text();
+
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const proxiedContent = encryptPlaylistContent(content, baseUrl, token, segmentUrl, ip, userAgent);
+
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.send(proxiedContent);
+    } else {
+      // This is an actual video segment, stream it
+      res.setHeader('Content-Type', contentType || 'video/mp2t');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+
+      if (response.body) {
+        response.body.pipe(res as any);
+      }
     }
   } catch (error: any) {
     console.error('Segment proxy error:', error);
