@@ -15,15 +15,14 @@ RUN pnpm install --frozen-lockfile
 # Copy source code
 COPY . .
 
-# Build TypeScript to JavaScript
-RUN pnpm run build
+# Build TypeScript to JavaScript using esbuild (super fast)
+RUN pnpm build:fast
 
 # Debug: Show what was built
-RUN echo "=== Build output ===" && ls -R lib/
+RUN echo "=== Build output ===" && ls -la dist/
 
 # Expose port
 EXPOSE 3000
 
-# Start server - use vite-node to handle TypeScript path aliases
-# This is more reliable than trying to compile with tsc-alias
-CMD ["pnpm", "start:server:dev"]
+# Start server - use compiled bundle
+CMD ["pnpm", "start:server"]
