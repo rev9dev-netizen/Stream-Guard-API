@@ -38,7 +38,7 @@
     "build": "tsc && tsc-alias",
     "build:fast": "node build.cjs",
     "dev": "tsc --watch",
-    "start:server": "node dist/server.js",
+    "start:server": "node dist/server.cjs",
     "start:server:dev": "vite-node src/server/index.ts",
     "cli": "vite-node ./src/dev-cli/index.ts",
     "test": "vitest",
