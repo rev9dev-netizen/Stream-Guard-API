@@ -36,12 +36,12 @@ async function replaceAsync(
  * Generate encrypted token for stream metadata
  * Binds token to IP and User-Agent for security
  */
-export function generateStreamToken(
+export async function generateStreamToken(
   url: string,
   headers: Record<string, string>,
   ip?: string,
   userAgent?: string,
-): string {
+): Promise<string> {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = Date.now() + 4 * 60 * 60 * 1000; // 4 hours
 
@@ -54,7 +54,7 @@ export function generateStreamToken(
   };
 
   // Store in Redis with the token as key
-  setRedisValue(`stream:token:${token}`, metadata);
+  await setRedisValue(`stream:token:${token}`, metadata);
 
   return token;
 }

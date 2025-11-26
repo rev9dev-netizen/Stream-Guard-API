@@ -269,15 +269,22 @@ app.get('/cdn', authMiddleware, scrapingLimiter, turnstileMiddleware, async (req
       // Generate FRESH tokens for this request (even if from cache)
       const proxiedResult = {
         ...result,
-        stream: result.stream?.map((stream: any) => {
-          // Generate a NEW token for each request with IP/UA binding
-          const token = generateStreamToken(stream.playlist, stream.headers || {}, req.ip, req.get('user-agent'));
-          return {
-            ...stream,
-            playlist: `${req.protocol}://${req.get('host')}/s/${token}`,
-            headers: {}, // Remove headers from response since proxy handles them
-          };
-        }),
+        stream: await Promise.all(
+          (result.stream || []).map(async (stream: any) => {
+            // Generate a NEW token for each request with IP/UA binding
+            const token = await generateStreamToken(
+              stream.playlist,
+              stream.headers || {},
+              req.ip,
+              req.get('user-agent'),
+            );
+            return {
+              ...stream,
+              playlist: `${req.protocol}://${req.get('host')}/s/${token}`,
+              headers: {}, // Remove headers from response since proxy handles them
+            };
+          }),
+        ),
       };
 
       return res.json(proxiedResult);
@@ -338,8 +345,12 @@ app.get('/s/:token', validateDomain, async (req: Request, res: Response) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.send(proxiedContent);
   } catch (error: any) {
-    console.error('Stream proxy error:', error);
-    res.status(500).send('Error');
+    console.error('[STREAM PROXY ERROR]', {
+      message: error.message,
+      stack: error.stack,
+      token: req.params.token,
+    });
+    res.status(500).send(`Stream Proxy Error: ${error.message}`);
   }
 });
 
