@@ -24,5 +24,6 @@ RUN echo "=== Build output ===" && ls -R lib/
 # Expose port
 EXPOSE 3000
 
-# Start server - use production build
-CMD ["pnpm", "start:server"]
+# Start server - use vite-node to handle TypeScript path aliases
+# This is more reliable than trying to compile with tsc-alias
+CMD ["pnpm", "start:server:dev"]
