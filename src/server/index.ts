@@ -6,15 +6,14 @@ import rateLimit from 'express-rate-limit';
 import slowDown from 'express-slow-down';
 import nodeFetch from 'node-fetch';
 
-import { runActualScraping } from '@/dev-cli/scraper';
-import { processOptions } from '@/dev-cli/validate';
-import { segmentRateLimiter } from '@/server/rate-limiter';
-import { getStats, updateProviderStats } from '@/server/stats';
-import { encryptPlaylistContent, generateStreamToken, getStreamMetadata } from '@/server/stream-proxy';
-import { turnstileMiddleware } from '@/server/turnstile';
-
 import { getBuiltinEmbeds, getBuiltinExternalSources, getBuiltinSources } from '..';
+import { segmentRateLimiter } from './rate-limiter';
 import { generateCacheKey, getCachedStream, setCachedStream } from './redis';
+import { getStats, updateProviderStats } from './stats';
+import { encryptPlaylistContent, generateStreamToken, getStreamMetadata } from './stream-proxy';
+import { turnstileMiddleware } from './turnstile';
+import { runActualScraping } from '../dev-cli/scraper';
+import { processOptions } from '../dev-cli/validate';
 
 dotenv.config();
 
