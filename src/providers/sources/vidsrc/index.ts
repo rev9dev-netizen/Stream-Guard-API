@@ -4,14 +4,8 @@ import { SourcererOutput, makeSourcerer } from '@/providers/base';
 import { MovieScrapeContext, ShowScrapeContext } from '@/utils/context';
 import { NotFoundError } from '@/utils/errors';
 
-import { decode, mirza } from './decrypt';
-import { evaluateOnCurrentPage, fetchWithPuppeteer } from './puppeteer-fetcher';
-
-// Default player configuration
-const o = {
-  y: 'xx??x?=xx?xx?=',
-  u: '#1RyJzl3JYmljm0mkJWOGYWNyI6MfwVNGYXmj9uQj5tQkeYIWoxLCJXNkawOGF5QZ9sQj1YIWowLCJXO20VbVJ1OZ11QGiSlni0QG9uIn19',
-};
+import { decodeStreamUrl, extractDecoderParams } from './decoders';
+import { extractScripts, fetchWithHeaders } from './http-fetcher';
 
 async function vidsrcScrape(ctx: MovieScrapeContext | ShowScrapeContext): Promise<SourcererOutput> {
   const imdbId = ctx.media.imdbId;
@@ -50,126 +44,146 @@ async function vidsrcScrape(ctx: MovieScrapeContext | ShowScrapeContext): Promis
 
   ctx.progress(50);
 
-  // Use Puppeteer to bypass Cloudflare Turnstile challenge
-  const rcpHtml = await fetchWithPuppeteer(rcpUrl, embedUrl);
+  // Use lightweight HTTP fetcher
+  const rcpHtml = await fetchWithHeaders(rcpUrl, {
+    referer: embedUrl,
+    retries: 3,
+    delay: 3000,
+  });
 
-  // Find the /prorcp/ URL from the JavaScript function (it's inside loadIframe function)
-  // Pattern matches: src: '/prorcp/...' (note the space after colon and single quotes)
+  // Find the /prorcp/ URL from the JavaScript function
   const scriptMatch = rcpHtml.match(/src:\s+'(\/prorcp\/[^']+)'/);
 
   if (!scriptMatch) {
-    throw new NotFoundError('Could not find prorcp URL - Cloudflare challenge may have failed');
+    // Try to extract m3u8 URL directly from the rcp page
+    const directM3u8Match = rcpHtml.match(/file\s*:\s*['"]([^'"]*\.m3u8[^'"]*)['"]/);
+    if (!directM3u8Match) {
+      throw new NotFoundError('Could not find prorcp iframe or direct m3u8 URL - Cloudflare may be blocking');
+    }
+
+    const streamUrl = directM3u8Match[1];
+
+    // Stream URL should be usable as-is
+
+    return {
+      stream: [
+        {
+          id: 'vidsrc-cloudnestra-0',
+          type: 'hls',
+          playlist: streamUrl,
+          headers: {
+            referer: 'https://cloudnestra.com/',
+            origin: 'https://cloudnestra.com',
+          },
+          proxyDepth: 2,
+          flags: [],
+          captions: [],
+        },
+      ],
+      embeds: [],
+    };
+  }
+
+  // Found prorcp URL, fetch it to get the final player page
+  const prorcpUrl = `https://cloudnestra.com${scriptMatch[1]}`;
+
+  ctx.progress(70);
+
+  const finalHtml = await fetchWithHeaders(prorcpUrl, {
+    referer: rcpUrl,
+    retries: 3,
+    delay: 2000,
+  });
+
+  // Find script containing Playerjs
+  const scripts = extractScripts(finalHtml);
+  let scriptWithPlayer = '';
+
+  for (const script of scripts) {
+    if (script.includes('Playerjs')) {
+      scriptWithPlayer = script;
+      break;
+    }
+  }
+
+  if (!scriptWithPlayer) {
+    throw new NotFoundError('No Playerjs config found');
   }
 
   let streamUrl = '';
 
-  if (scriptMatch) {
-    // Found prorcp URL, fetch it to get the final player page
-    const prorcpUrl = `https://cloudnestra.com${scriptMatch[1]}`;
+  // Try to find file: "url" pattern first (old format)
+  const m3u8Match = scriptWithPlayer.match(/file\s*:\s*['"]([^'"]+)['"]/);
 
-    ctx.progress(70);
+  if (!m3u8Match) {
+    // New format: file: variableName (references a hidden div)
+    const fileVarMatch = scriptWithPlayer.match(/file\s*:\s*([a-zA-Z0-9_]+)\s*[,}]/);
 
-    const finalHtml = await fetchWithPuppeteer(prorcpUrl, rcpUrl);
+    if (fileVarMatch) {
+      const varName = fileVarMatch[1];
 
-    // Find script containing Playerjs
-    const scripts = finalHtml.split('<script');
-    let scriptWithPlayer = '';
+      // Find the div with this ID that contains the encoded data
+      const divMatch = finalHtml.match(new RegExp(`<div id="${varName}"[^>]*>\\s*([^<]+)\\s*</div>`, 's'));
 
-    for (const script of scripts) {
-      if (script.includes('Playerjs')) {
-        scriptWithPlayer = script;
-        break;
-      }
-    }
+      if (divMatch) {
+        // Extract and decode the value
+        // Since we can't execute JS, try to decode it manually
+        const encodedData = divMatch[1].trim();
 
-    if (!scriptWithPlayer) {
-      throw new NotFoundError('No Playerjs config found');
-    }
-
-    // Try to find file: "url" pattern first (old format)
-    const m3u8Match = scriptWithPlayer.match(/file\s*:\s*['"]([^'"]+)['"]/);
-
-    if (!m3u8Match) {
-      // New format: file: variableName (references a hidden div)
-      const fileVarMatch = scriptWithPlayer.match(/file\s*:\s*([a-zA-Z0-9_]+)\s*[,}]/);
-
-      if (fileVarMatch) {
-        const varName = fileVarMatch[1];
-
-        // Find the div with this ID that contains the encoded data
-        const divMatch = finalHtml.match(new RegExp(`<div id="${varName}"[^>]*>\\s*([^<]+)\\s*</div>`, 's'));
-
-        if (divMatch) {
-          // The page decodes this automatically and puts it in window[varName]
-          // We can extract it using Puppeteer
-
-          // Wait a bit for the decoding script to run
-          await new Promise<void>((resolve) => {
-            setTimeout(() => {
-              resolve();
-            }, 2000);
-          });
-
-          try {
-            // Extract the variable value from the window object
-            const decodedUrl = await evaluateOnCurrentPage<unknown>((name: string) => {
-              return (window as any)[name];
-            }, varName);
-
-            if (decodedUrl && typeof decodedUrl === 'string') {
-              const urlStr = decodedUrl as string;
-              streamUrl = urlStr;
-            } else {
-              throw new NotFoundError('Failed to extract decoded URL from page');
-            }
-          } catch (err) {
-            throw new NotFoundError('Error executing extraction script');
-          }
-        } else {
-          throw new NotFoundError('No file data found in referenced div');
+        // Try to decode - this is a simple base64 check
+        try {
+          streamUrl = Buffer.from(encodedData, 'base64').toString('utf-8');
+        } catch (e) {
+          streamUrl = encodedData; // Use as-is if decode fails
         }
       } else {
-        throw new NotFoundError('No file field in Playerjs');
+        throw new NotFoundError('No file data found in referenced div');
       }
     } else {
-      streamUrl = m3u8Match[1];
+      throw new NotFoundError('No file field in Playerjs');
     }
   } else {
-    // Fallback: try to extract m3u8 URL directly from the rcp page
-    ctx.progress(70);
-
-    const directM3u8Match = rcpHtml.match(/file\s*:\s*['"]([^'"]*\.m3u8[^'"]*)['"]/);
-    if (!directM3u8Match) {
-      throw new NotFoundError('Could not find prorcp iframe or direct m3u8 URL');
-    }
-
-    streamUrl = directM3u8Match[1];
+    streamUrl = m3u8Match[1];
   }
 
+  // Extract decoder params from HTML
+  const decoderParams = extractDecoderParams(finalHtml);
+
+  if (decoderParams) {
+    // Found decoder params, use the proper decoder
+    const decoded = decodeStreamUrl(decoderParams.id, decoderParams.content);
+
+    if (decoded && (decoded.includes('http') || decoded.includes('.m3u8'))) {
+      streamUrl = decoded;
+    }
+  }
+
+  // If streamUrl still doesn't look like a URL, it needs decoding but we couldn't decode it
   if (!streamUrl.includes('.m3u8') && !streamUrl.startsWith('http')) {
-    // Check if we need to decode the URL
-    const v = JSON.parse(decode(o.u));
-    streamUrl = mirza(streamUrl, v);
+    throw new NotFoundError('Could not decode stream URL - decoder params not found or invalid');
   }
 
   // Post-processing for specific placeholders
-  // The streamUrl might contain multiple URLs separated by " or "
   const rawUrls = streamUrl.split(' or ');
   const streams: any[] = [];
 
-  // Try to find domain values in the page
-  const domainMap = await evaluateOnCurrentPage<Record<string, string>>(() => {
-    // Check for common variable names or patterns
-    const vars: Record<string, string> = {};
-    if ((window as any).v1) vars.v1 = (window as any).v1;
-    if ((window as any).v2) vars.v2 = (window as any).v2;
-    if ((window as any).v3) vars.v3 = (window as any).v3;
-    if ((window as any).v4) vars.v4 = (window as any).v4;
+  // Extract domain values from HTML (since we can't execute JS)
+  const domainMap: Record<string, string> = {};
 
-    return vars;
-  }).catch(() => ({}) as Record<string, string>);
+  // Look for v1, v2, v3, v4 variable assignments in scripts
+  for (const script of scripts) {
+    const v1Match = script.match(/v1\s*=\s*['"]([^'"]+)['"]/);
+    const v2Match = script.match(/v2\s*=\s*['"]([^'"]+)['"]/);
+    const v3Match = script.match(/v3\s*=\s*['"]([^'"]+)['"]/);
+    const v4Match = script.match(/v4\s*=\s*['"]([^'"]+)['"]/);
 
-  // Hardcoded fallback for v1 if not found (based on previous success)
+    if (v1Match) domainMap.v1 = v1Match[1];
+    if (v2Match) domainMap.v2 = v2Match[1];
+    if (v3Match) domainMap.v3 = v3Match[1];
+    if (v4Match) domainMap.v4 = v4Match[1];
+  }
+
+  // Hardcoded fallback for v1 if not found
   if (!domainMap.v1) domainMap.v1 = 'shadowlandschronicles.com';
 
   const headers = {
@@ -210,6 +224,10 @@ async function vidsrcScrape(ctx: MovieScrapeContext | ShowScrapeContext): Promis
 
   ctx.progress(90);
 
+  if (streams.length === 0) {
+    throw new NotFoundError('No valid streams found');
+  }
+
   return {
     stream: streams,
     embeds: [],
@@ -225,4 +243,4 @@ export const vidsrcScraper = makeSourcerer({
   scrapeShow: vidsrcScrape,
 });
 
-// thanks Mirzya for this scraper fixed by @rev9
+// thanks Mirzya for this scraper - refactored by @rev9

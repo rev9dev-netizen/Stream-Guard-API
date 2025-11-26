@@ -57,19 +57,19 @@ export class SegmentRateLimiter {
       }
     } else {
       // Reset counter if window has passed
-      await this.recordRequest(key, now, true);
+      await this.recordRequest(key, now, undefined, true);
       return { allowed: true };
     }
 
     // Update counter
-    await this.recordRequest(key, now, false, data);
+    await this.recordRequest(key, now, data, false);
     return { allowed: true };
   }
 
   /**
    * Record a request
    */
-  private async recordRequest(key: string, now: number, reset = false, existingData?: RateLimitData): Promise<void> {
+  private async recordRequest(key: string, now: number, existingData?: RateLimitData, reset = false): Promise<void> {
     const data: RateLimitData =
       reset || !existingData
         ? {

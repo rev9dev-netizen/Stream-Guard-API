@@ -96,36 +96,29 @@ function validateDomain(req: Request, res: Response, next: () => void) {
   const referer = req.get('referer') || req.get('origin') || '';
   const host = req.get('host') || '';
 
-  // Allow localhost in development
-  if (host.includes('localhost') || host.includes('127.0.0.1')) {
+  // 1. BLOCK Direct Access (No Referer)
+  // This prevents users from copying the URL and opening it in a new tab
+  if (!referer) {
+    console.log(`[BLOCKED] Direct URL access attempt (No Referer) from IP: ${req.ip}`);
+    return res.status(403).send('Access denied: Direct access not allowed');
+  }
+
+  // 2. Allow requests from the same host (e.g. your own frontend)
+  // This allows localhost:3000 -> localhost:3000
+  if (referer.includes(host)) {
     return next();
   }
 
-  // Allow requests from same host (for test page)
-  if (referer && referer.includes(host)) {
-    return next();
-  }
-
-  // Check if referer matches any allowed domain
+  // 3. Check against ALLOWED_DOMAINS list
   const isAllowed = ALLOWED_DOMAINS.some((domain) => referer.includes(domain) || referer.includes(`://${domain}`));
 
-  if (!isAllowed && referer) {
-    console.log(`[BLOCKED] Unauthorized domain access attempt from: ${referer} (host: ${host})`);
-    return res.status(403).send('Access denied');
-  }
-
-  // In development, allow requests without referer from localhost
-  if (!referer && (host.includes('localhost') || host.includes('127.0.0.1'))) {
+  if (isAllowed) {
     return next();
   }
 
-  // Block direct access (no referer) in production
-  if (!referer) {
-    console.log(`[BLOCKED] Direct URL access attempt from IP: ${req.ip}, host: ${host}`);
-    return res.status(403).send('Access denied');
-  }
-
-  next();
+  // 4. Block everything else
+  console.log(`[BLOCKED] Unauthorized domain access from: ${referer}`);
+  return res.status(403).send('Access denied: Domain not authorized');
 }
 
 // Serve test page
@@ -254,8 +247,23 @@ app.get('/cdn', authMiddleware, scrapingLimiter, turnstileMiddleware, async (req
     const result = await runActualScraping(providerOptions, validatedSource, validatedOps);
 
     if (result) {
-      // Cache the RAW result (with original URLs) by TMDB ID
-      await setCachedStream(cacheKey, result);
+      // Fetch metadata from TMDB
+      const { getMediaMetadata } = await import('./tmdb');
+      const metadata = await getMediaMetadata(tId, mType as 'movie' | 'show', sSeason, sEpisode);
+
+      // Cache the RAW result with metadata
+      const cacheData = {
+        ...result,
+        metadata: metadata
+          ? {
+              ...metadata,
+              scrapedAt: new Date().toISOString(),
+              timestamp: Date.now(),
+            }
+          : undefined,
+      };
+
+      await setCachedStream(cacheKey, cacheData);
       const responseTime = Date.now() - startTime;
       updateProviderStats(sId, true, responseTime);
 
@@ -325,7 +333,7 @@ app.get('/s/:token', validateDomain, async (req: Request, res: Response) => {
     // Process the playlist to replace URLs with proxied versions
     // Pass IP and UA for segment token binding
     const baseUrl = `${req.protocol}://${req.get('host')}`;
-    const proxiedContent = encryptPlaylistContent(content, baseUrl, token, metadata.url, ip, userAgent);
+    const proxiedContent = await encryptPlaylistContent(content, baseUrl, token, metadata.url, ip, userAgent);
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -363,9 +371,9 @@ app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, re
       return res.status(404).send('Not found');
     }
 
-    // Verify signed segment token (no Redis lookup!)
-    const { verifySignedSegmentToken } = await import('./stream-proxy');
-    const segmentData = verifySignedSegmentToken(segmentToken, token);
+    // Verify and decrypt the encrypted segment token
+    const { verifyEncryptedSegmentToken } = await import('./stream-proxy');
+    const segmentData = await verifyEncryptedSegmentToken(segmentToken, token);
 
     if (!segmentData) {
       return res.status(404).send('Not found');
@@ -392,15 +400,25 @@ app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, re
       const content = await response.text();
 
       const baseUrl = `${req.protocol}://${req.get('host')}`;
-      const proxiedContent = encryptPlaylistContent(content, baseUrl, token, segmentUrl, ip, userAgent);
+      const proxiedContent = await encryptPlaylistContent(content, baseUrl, token, segmentUrl, ip, userAgent);
 
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.send(proxiedContent);
     } else {
-      // This is an actual video segment, stream it
+      // This is an actual video segment, stream it with aggressive buffering headers
+      const contentLength = response.headers.get('content-length');
+
       res.setHeader('Content-Type', contentType || 'video/mp2t');
       res.setHeader('Access-Control-Allow-Origin', '*');
+
+      // Aggressive buffering headers
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // Cache for 1 year
+      res.setHeader('Accept-Ranges', 'bytes'); // Enable range requests
+
+      if (contentLength) {
+        res.setHeader('Content-Length', contentLength);
+      }
 
       if (response.body) {
         response.body.pipe(res as any);

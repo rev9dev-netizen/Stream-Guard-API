@@ -24,5 +24,5 @@ RUN echo "=== Build output ===" && ls -R lib/
 # Expose port
 EXPOSE 3000
 
-# Start server - use vite-node as fallback since tsc output structure is different
-CMD ["pnpm", "start:server:dev"]
+# Start server - use production build
+CMD ["pnpm", "start:server"]

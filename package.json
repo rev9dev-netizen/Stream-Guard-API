@@ -37,7 +37,7 @@
   "scripts": {
     "build": "tsc && tsc-alias",
     "dev": "tsc --watch",
-    "start:server": "node lib/server/index.js",
+    "start:server": "node lib/src/server/index.js",
     "start:server:dev": "vite-node src/server/index.ts",
     "cli": "vite-node ./src/dev-cli/index.ts",
     "test": "vitest",
@@ -101,11 +101,9 @@
     "json5": "^2.2.3",
     "nanoid": "^3.3.8",
     "node-fetch": "^3.3.2",
-    "puppeteer": "^22.15.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "puppeteer-real-browser": "^1.4.4",
     "set-cookie-parser": "^2.7.1",
+    "tough-cookie": "^6.0.0",
+    "undici": "^7.16.0",
     "unpacker": "^1.0.1"
   },
   "packageManager": "pnpm@9.14.4"

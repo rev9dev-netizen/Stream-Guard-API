@@ -57,8 +57,6 @@ async function comboScraper(ctx: ShowScrapeContext | MovieScrapeContext): Promis
       },
     },
   );
-  // eslint-disable-next-line no-console
-  console.log('host', getHost());
 
   ctx.progress(30);
 

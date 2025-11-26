@@ -1,7 +1,13 @@
 /* eslint-disable no-console */
 import crypto from 'crypto';
+import zlib from 'zlib';
 
-import { getCachedStream as getRedisValue, setCachedStream as setRedisValue } from './redis';
+import {
+  getCachedStream as getRedisValue,
+  getStreamSegment,
+  setBatchStreamSegments,
+  setCachedStream as setRedisValue,
+} from './redis';
 
 type StreamMetadata = {
   url: string;
@@ -11,13 +17,20 @@ type StreamMetadata = {
   userAgent?: string; // Bind to User-Agent
 };
 
-type SegmentMetadata = {
-  url: string;
-  expiresAt: number;
-  ip: string;
-  userAgent: string;
-  used: boolean; // One-time use flag
-};
+// Helper for async string replacement
+async function replaceAsync(
+  str: string,
+  regex: RegExp,
+  asyncFn: (match: string, ...args: any[]) => Promise<string>,
+): Promise<string> {
+  const promises: Promise<string>[] = [];
+  str.replace(regex, (match, ...args) => {
+    promises.push(asyncFn(match, ...args));
+    return match;
+  });
+  const data = await Promise.all(promises);
+  return str.replace(regex, () => data.shift() || '');
+}
 
 /**
  * Generate encrypted token for stream metadata
@@ -83,110 +96,187 @@ export async function getStreamMetadata(
 }
 
 /**
- * Encrypt playlist content and generate segment tokens
- * Each segment gets a unique token with 3-second expiry and one-time use
+ * Generate encrypted payload and short ID (internal helper)
+ * Does NOT save to Redis (caller must handle storage)
  */
-export function encryptPlaylistContent(
+async function generateEncryptedSegmentPayload(
+  url: string,
+  expiresAt: number,
+  masterToken: string,
+): Promise<{ shortId: string; encryptedData: string }> {
+  // Create encryption key from master token (SHA-256 for AES-256)
+  const keyHash = crypto.createHash('sha256').update(masterToken).digest();
+
+  // Generate random IV (12 bytes for GCM)
+  const iv = crypto.randomBytes(12);
+
+  // Create cipher
+  const cipher = crypto.createCipheriv('aes-256-gcm', keyHash, iv);
+
+  // Create payload and compress it (reduces size by ~40%)
+  const payload = JSON.stringify({ url, exp: expiresAt });
+  const compressed = zlib.deflateSync(payload);
+
+  // Encrypt the compressed data
+  let encrypted = cipher.update(compressed);
+  const final = cipher.final();
+  encrypted = Buffer.concat([encrypted, final]);
+
+  // Get authentication tag
+  const authTag = cipher.getAuthTag();
+
+  // Combine: IV + encrypted data + auth tag
+  const combined = Buffer.concat([iv, encrypted, authTag]);
+  const encryptedData = combined.toString('base64url');
+
+  // Generate short, clean-looking token ID (16 chars)
+  const shortId = crypto.randomBytes(8).toString('hex');
+
+  return { shortId, encryptedData };
+}
+
+/**
+ * Encrypt playlist content and generate segment tokens
+ * Segments use short token IDs for clean URLs
+ * Optimized: Stores all segments in ONE Redis Hash key
+ */
+export async function encryptPlaylistContent(
   content: string,
   baseUrl: string,
   token: string,
   originalUrl: string,
-  ip: string,
-  userAgent: string,
-): string {
+  _ip: string,
+  _userAgent: string,
+): Promise<string> {
   const lines = content.split('\n');
-  const processedLines = lines.map((line) => {
-    const trimmed = line.trim();
+  const segmentMapping: Record<string, string> = {};
+  const expiresAt = Date.now() + 4 * 60 * 60 * 1000; // 4 hours
 
-    // Skip comments and empty lines
-    if (!trimmed || trimmed.startsWith('#')) {
-      return line;
-    }
+  // First pass: Process lines and collect all segments
+  const processedLines = await Promise.all(
+    lines.map(async (line) => {
+      const trimmed = line.trim();
 
-    // This is a URL line (segment or sub-playlist)
-    let fullUrl = trimmed;
+      // Check for URI="..." attributes in tags (e.g. #EXT-X-MEDIA, #EXT-X-KEY)
+      if (trimmed.startsWith('#') && trimmed.includes('URI="')) {
+        return replaceAsync(line, /URI="([^"]+)"/g, async (match, uri) => {
+          let fullUrl = uri;
 
-    // Convert relative URLs to absolute
-    if (!trimmed.startsWith('http')) {
-      const baseUrlObj = new URL(originalUrl);
-      if (trimmed.startsWith('/')) {
-        // Absolute path
-        fullUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${trimmed}`;
-      } else {
-        // Relative path
-        const pathParts = baseUrlObj.pathname.split('/');
-        pathParts.pop(); // Remove filename
-        fullUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${pathParts.join('/')}/${trimmed}`;
+          // Convert relative URLs to absolute
+          if (!uri.startsWith('http')) {
+            const baseUrlObj = new URL(originalUrl);
+            if (uri.startsWith('/')) {
+              fullUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${uri}`;
+            } else {
+              const pathParts = baseUrlObj.pathname.split('/');
+              pathParts.pop();
+              fullUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${pathParts.join('/')}/${uri}`;
+            }
+          }
+
+          // Generate encrypted payload
+          const { shortId, encryptedData } = await generateEncryptedSegmentPayload(fullUrl, expiresAt, token);
+
+          // Add to batch mapping
+          segmentMapping[shortId] = encryptedData;
+
+          // Return proxied URL
+          return `URI="${baseUrl}/s/${token}/chunk/${shortId}"`;
+        });
       }
-    }
 
-    // Generate a unique segment token with ultra-short expiry
-    const segmentToken = crypto.randomBytes(16).toString('hex');
+      // Skip other comments/tags
+      if (!trimmed || trimmed.startsWith('#')) {
+        return line;
+      }
 
-    // Store segment metadata with IP/UA binding and 3-second expiry
-    const segmentKey = `segment:${token}:${segmentToken}`;
-    const segmentMetadata: SegmentMetadata = {
-      url: fullUrl,
-      expiresAt: Date.now() + 3000, // 3 seconds!
-      ip,
-      userAgent,
-      used: false, // One-time use flag
-    };
+      // This is a URL line (segment or sub-playlist)
+      let fullUrl = trimmed;
 
-    setRedisValue(segmentKey, segmentMetadata);
+      // Convert relative URLs to absolute
+      if (!trimmed.startsWith('http')) {
+        const baseUrlObj = new URL(originalUrl);
+        if (trimmed.startsWith('/')) {
+          // Absolute path
+          fullUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${trimmed}`;
+        } else {
+          // Relative path
+          const pathParts = baseUrlObj.pathname.split('/');
+          pathParts.pop(); // Remove filename
+          fullUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${pathParts.join('/')}/${trimmed}`;
+        }
+      }
 
-    // Return proxied URL (opaque format) - NO URL in query params
-    return `${baseUrl}/s/${token}/chunk/${segmentToken}`;
-  });
+      // Generate encrypted payload (but don't save to Redis yet)
+      const { shortId, encryptedData } = await generateEncryptedSegmentPayload(fullUrl, expiresAt, token);
+
+      // Add to batch mapping
+      segmentMapping[shortId] = encryptedData;
+
+      // Return proxied URL with short token
+      return `${baseUrl}/s/${token}/chunk/${shortId}`;
+    }),
+  );
+
+  // Batch save all segments to Redis in ONE call
+  const ttl = Math.ceil((expiresAt - Date.now()) / 1000);
+  await setBatchStreamSegments(token, segmentMapping, ttl);
 
   return processedLines.join('\n');
 }
 
 /**
- * Get and validate segment metadata
- * Checks IP/UA binding, expiry, and one-time use
+ * Verify a short segment token by looking up encrypted data in Redis
+ * Returns null if token not found, expired, or decryption fails
  */
-export async function getSegmentMetadata(
-  token: string,
-  segmentToken: string,
-  ip: string,
-  userAgent: string,
-): Promise<string | null> {
-  const segmentKey = `segment:${token}:${segmentToken}`;
-  const metadata: SegmentMetadata | null = await getRedisValue(segmentKey);
+export async function verifyEncryptedSegmentToken(
+  shortTokenId: string,
+  masterToken: string,
+): Promise<{ url: string; expiresAt: number } | null> {
+  try {
+    // Retrieve encrypted data from Redis Hash (1 lookup)
+    const encryptedData = await getStreamSegment(masterToken, shortTokenId);
 
-  if (!metadata) {
-    console.log(`[SECURITY] Segment not found: ${segmentToken}`);
+    if (!encryptedData) {
+      return null; // Token not found or expired
+    }
+
+    // Decode from base64url
+    const combined = Buffer.from(encryptedData, 'base64url');
+
+    // Extract IV (first 12 bytes)
+    const iv = combined.subarray(0, 12);
+
+    // Extract auth tag (last 16 bytes)
+    const authTag = combined.subarray(combined.length - 16);
+
+    // Extract encrypted data (middle part)
+    const encrypted = combined.subarray(12, combined.length - 16);
+
+    // Create decryption key from master token
+    const keyHash = crypto.createHash('sha256').update(masterToken).digest();
+
+    // Create decipher
+    const decipher = crypto.createDecipheriv('aes-256-gcm', keyHash, iv);
+    decipher.setAuthTag(authTag);
+
+    // Decrypt
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+
+    // Decompress
+    const decompressed = zlib.inflateSync(decrypted).toString('utf8');
+
+    // Parse payload
+    const payload = JSON.parse(decompressed);
+
+    // Check expiration
+    if (payload.exp < Date.now()) {
+      return null; // Expired
+    }
+
+    return { url: payload.url, expiresAt: payload.exp };
+  } catch (error) {
+    // Decryption failed or Redis error
     return null;
   }
-
-  // Check if already used (one-time use)
-  if (metadata.used) {
-    console.log(`[SECURITY] Segment already used: ${segmentToken}`);
-    return null;
-  }
-
-  // Check expiration (3 seconds)
-  if (Date.now() > metadata.expiresAt) {
-    console.log(`[SECURITY] Segment expired: ${segmentToken}`);
-    return null;
-  }
-
-  // Validate IP binding
-  if (metadata.ip !== ip) {
-    console.log(`[SECURITY] IP mismatch for segment. Expected: ${metadata.ip}, Got: ${ip}`);
-    return null;
-  }
-
-  // Validate User-Agent binding
-  if (metadata.userAgent !== userAgent) {
-    console.log(`[SECURITY] User-Agent mismatch for segment`);
-    return null;
-  }
-
-  // Mark as used (one-time use)
-  metadata.used = true;
-  await setRedisValue(segmentKey, metadata);
-
-  return metadata.url;
 }

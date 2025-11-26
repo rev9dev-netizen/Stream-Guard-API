@@ -32,12 +32,40 @@ export async function getCachedStream(key: string): Promise<any | null> {
   }
 }
 
-export async function setCachedStream(key: string, data: any): Promise<void> {
+export async function setCachedStream(key: string, data: any, ttl: number = CACHE_TTL): Promise<void> {
   if (!redis) return;
   try {
-    await redis.set(key, data, { ex: CACHE_TTL });
+    await redis.set(key, data, { ex: ttl });
   } catch (error) {
     console.error('Redis set error:', error);
+  }
+}
+
+export async function setBatchStreamSegments(
+  masterToken: string,
+  mapping: Record<string, string>,
+  ttl: number = CACHE_TTL,
+): Promise<void> {
+  if (!redis) return;
+  try {
+    const key = `seg:${masterToken}`;
+    // Store all mappings in one Hash
+    await redis.hset(key, mapping);
+    // Set expiry for the whole hash
+    await redis.expire(key, ttl);
+  } catch (error) {
+    console.error('Redis batch set error:', error);
+  }
+}
+
+export async function getStreamSegment(masterToken: string, shortId: string): Promise<string | null> {
+  if (!redis) return null;
+  try {
+    const key = `seg:${masterToken}`;
+    return await redis.hget(key, shortId);
+  } catch (error) {
+    console.error('Redis hash get error:', error);
+    return null;
   }
 }
 
