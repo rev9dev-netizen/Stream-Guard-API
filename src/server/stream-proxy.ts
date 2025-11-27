@@ -80,10 +80,24 @@ export async function getStreamMetadata(
     return null;
   }
 
+  // Normalize localhost IPs (IPv4 <-> IPv6)
+  const normalizeLocalhost = (ipAddr?: string): string => {
+    if (!ipAddr) return '';
+    if (ipAddr === '::1' || ipAddr === '::ffff:127.0.0.1' || ipAddr === '127.0.0.1') {
+      return 'localhost';
+    }
+    return ipAddr;
+  };
+
   // Validate IP binding (if set)
-  if (metadata.ip && ip && metadata.ip !== ip) {
-    console.log(`[SECURITY] IP mismatch for token. Expected: ${metadata.ip}, Got: ${ip}`);
-    return null;
+  if (metadata.ip && ip) {
+    const normalizedMetadataIp = normalizeLocalhost(metadata.ip);
+    const normalizedRequestIp = normalizeLocalhost(ip);
+    
+    if (normalizedMetadataIp !== normalizedRequestIp) {
+      console.log(`[SECURITY] IP mismatch for token. Expected: ${metadata.ip}, Got: ${ip}`);
+      return null;
+    }
   }
 
   // Validate User-Agent binding (if set)
@@ -98,6 +112,7 @@ export async function getStreamMetadata(
 /**
  * Generate encrypted payload and short ID (internal helper)
  * Does NOT save to Redis (caller must handle storage)
+ * Enhanced with random padding and scrambling for maximum obfuscation
  */
 async function generateEncryptedSegmentPayload(
   url: string,
@@ -113,8 +128,11 @@ async function generateEncryptedSegmentPayload(
   // Create cipher
   const cipher = crypto.createCipheriv('aes-256-gcm', keyHash, iv);
 
-  // Create payload and compress it (reduces size by ~40%)
-  const payload = JSON.stringify({ url, exp: expiresAt });
+  // Add random padding to make tokens variable length (prevents pattern analysis)
+  const randomPadding = crypto.randomBytes(Math.floor(Math.random() * 16) + 8).toString('hex');
+
+  // Create payload with random padding and compress it
+  const payload = JSON.stringify({ url, exp: expiresAt, _pad: randomPadding });
   const compressed = zlib.deflateSync(payload);
 
   // Encrypt the compressed data
@@ -129,8 +147,9 @@ async function generateEncryptedSegmentPayload(
   const combined = Buffer.concat([iv, encrypted, authTag]);
   const encryptedData = combined.toString('base64url');
 
-  // Generate short, clean-looking token ID (16 chars)
-  const shortId = crypto.randomBytes(8).toString('hex');
+  // Generate short, clean-looking token ID with random length (12-20 chars)
+  const tokenLength = Math.floor(Math.random() * 5) + 6; // 6-10 bytes = 12-20 hex chars
+  const shortId = crypto.randomBytes(tokenLength).toString('hex');
 
   return { shortId, encryptedData };
 }
@@ -139,6 +158,7 @@ async function generateEncryptedSegmentPayload(
  * Encrypt playlist content and generate segment tokens
  * Segments use short token IDs for clean URLs
  * Optimized: Stores all segments in ONE Redis Hash key
+ * Enhanced: Validates output to ensure no CDN URLs are exposed
  */
 export async function encryptPlaylistContent(
   content: string,
@@ -151,6 +171,9 @@ export async function encryptPlaylistContent(
   const lines = content.split('\n');
   const segmentMapping: Record<string, string> = {};
   const expiresAt = Date.now() + 4 * 60 * 60 * 1000; // 4 hours
+
+  console.log(`[PLAYLIST ENCRYPTION] Processing playlist from: ${originalUrl.substring(0, 100)}`);
+  console.log(`[PLAYLIST ENCRYPTION] Total lines: ${lines.length}`);
 
   // First pass: Process lines and collect all segments
   const processedLines = await Promise.all(
@@ -174,14 +197,16 @@ export async function encryptPlaylistContent(
             }
           }
 
+          console.log(`[PLAYLIST ENCRYPTION] Encrypting URI attribute: ${fullUrl.substring(0, 80)}...`);
+
           // Generate encrypted payload
           const { shortId, encryptedData } = await generateEncryptedSegmentPayload(fullUrl, expiresAt, token);
 
           // Add to batch mapping
           segmentMapping[shortId] = encryptedData;
 
-          // Return proxied URL
-          return `URI="${baseUrl}/s/${token}/chunk/${shortId}"`;
+          // Return flat proxied URL
+          return `URI="${baseUrl}/${token}/${shortId}"`;
         });
       }
 
@@ -207,14 +232,16 @@ export async function encryptPlaylistContent(
         }
       }
 
+      console.log(`[PLAYLIST ENCRYPTION] Encrypting segment: ${fullUrl.substring(0, 80)}...`);
+
       // Generate encrypted payload (but don't save to Redis yet)
       const { shortId, encryptedData } = await generateEncryptedSegmentPayload(fullUrl, expiresAt, token);
 
       // Add to batch mapping
       segmentMapping[shortId] = encryptedData;
 
-      // Return proxied URL with short token
-      return `${baseUrl}/s/${token}/chunk/${shortId}`;
+      // Return flat proxied URL
+      return `${baseUrl}/${token}/${shortId}`;
     }),
   );
 
@@ -222,7 +249,20 @@ export async function encryptPlaylistContent(
   const ttl = Math.ceil((expiresAt - Date.now()) / 1000);
   await setBatchStreamSegments(token, segmentMapping, ttl);
 
-  return processedLines.join('\n');
+  const result = processedLines.join('\n');
+
+  console.log(`[PLAYLIST ENCRYPTION] Encrypted ${Object.keys(segmentMapping).length} segments`);
+  console.log(`[PLAYLIST ENCRYPTION] Output length: ${result.length} bytes`);
+
+  // Validate that no CDN URLs are exposed
+  const { validatePlaylistSecurity } = await import('./response-validator');
+  const isSecure = validatePlaylistSecurity(result, `token:${token.substring(0, 8)}`);
+
+  if (!isSecure) {
+    console.error('[PLAYLIST ENCRYPTION] SECURITY VIOLATION: Exposed URLs detected in encrypted playlist!');
+  }
+
+  return result;
 }
 
 /**

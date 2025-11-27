@@ -105,7 +105,6 @@ export async function getAllProviderHealth(): Promise<Record<string, any>> {
   try {
     const data = await redis.hgetall('provider:health');
     if (!data) return {};
-    
     const result: Record<string, any> = {};
     for (const [key, value] of Object.entries(data)) {
       try {

@@ -11,9 +11,11 @@ import { getBuiltinEmbeds, getBuiltinExternalSources, getBuiltinSources } from '
 import { startHealthCheckLoop } from './health-check.js';
 import { segmentRateLimiter } from './rate-limiter.js';
 import { generateCacheKey, getAllProviderHealth, getCachedStream, setCachedStream } from './redis.js';
+import { validatePlaylistSecurity } from './response-validator.js';
 import { updateProviderStats } from './stats.js';
 import { encryptPlaylistContent, generateStreamToken, getStreamMetadata } from './stream-proxy.js';
 import { turnstileMiddleware } from './turnstile.js';
+import { encryptUrl } from './url-crypto.js';
 import { runActualScraping } from '../dev-cli/scraper.js';
 import { processOptions } from '../dev-cli/validate.js';
 
@@ -94,6 +96,20 @@ console.log('Allowed domains for stream access:', ALLOWED_DOMAINS);
 
 // Domain validation middleware for stream endpoints
 function validateDomain(req: Request, res: Response, next: () => void) {
+  // Debug logging
+  console.log('[VALIDATE_DOMAIN]', {
+    'X-Worker-Proxy': req.get('X-Worker-Proxy'),
+    referer: req.get('referer'),
+    origin: req.get('origin'),
+    host: req.get('host'),
+  });
+
+  // Allow requests from Cloudflare Worker proxy
+  if (req.get('X-Worker-Proxy') === 'stream-guard') {
+    console.log('[VALIDATE_DOMAIN] ✅ Worker proxy authenticated');
+    return next();
+  }
+
   const referer = req.get('referer') || req.get('origin') || '';
   const host = req.get('host') || '';
 
@@ -120,6 +136,24 @@ function validateDomain(req: Request, res: Response, next: () => void) {
   // 4. Block everything else
   console.log(`[BLOCKED] Unauthorized domain access from: ${referer}`);
   return res.status(403).send('Access denied: Domain not authorized');
+}
+
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.url}`);
+  next();
+});
+
+// Token validation middleware
+function validateTokenFormat(req: Request, res: Response, next: () => void) {
+  const { token } = req.params;
+
+  // Token must be exactly 64 hexadecimal characters
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) {
+    return res.status(404).send('Not found');
+  }
+
+  next();
 }
 
 // Serve test page
@@ -212,21 +246,31 @@ app.get('/cdn', authMiddleware, scrapingLimiter, turnstileMiddleware, async (req
         const responseTime = Date.now() - startTime;
         updateProviderStats(sId, true, responseTime);
 
+        const ip = req.ip || '';
+        const userAgent = req.get('user-agent') || '';
+
         // Generate FRESH tokens even for cached results
         const proxiedResult = {
           ...cached,
           stream: await Promise.all(
             (cached.stream || []).map(async (stream: any) => {
-              // NEW token for each request with IP/UA binding
-              const token = await generateStreamToken(
-                stream.playlist,
-                stream.headers || {},
-                req.ip,
-                req.get('user-agent'),
+              // Generate streaming token
+              const token = await generateStreamToken(stream.playlist, stream.headers || {}, ip, userAgent);
+
+              // Generate encrypted worker URL
+              const apiUrl = `${req.protocol}://${req.get('host')}/${token}`;
+              const workerUrl = process.env.WORKER_URL || 'http://localhost:8787';
+              const encryptedPath = encryptUrl(apiUrl);
+              const finalUrl = `${workerUrl}/${encryptedPath}`;
+
+              console.log(
+                `[CDN] Generated worker URL for ${sourceId}:`,
+                `\n  API: ${apiUrl}`,
+                `\n  Worker: ${finalUrl.substring(0, 100)}...`,
               );
               return {
                 ...stream,
-                playlist: `${req.protocol}://${req.get('host')}/s/${token}`,
+                playlist: finalUrl,
                 headers: {},
               };
             }),
@@ -276,21 +320,31 @@ app.get('/cdn', authMiddleware, scrapingLimiter, turnstileMiddleware, async (req
       const responseTime = Date.now() - startTime;
       updateProviderStats(sId, true, responseTime);
 
+      const ip = req.ip || '';
+      const userAgent = req.get('user-agent') || '';
+
       // Generate FRESH tokens for this request (even if from cache)
       const proxiedResult = {
         ...result,
         stream: await Promise.all(
           (result.stream || []).map(async (stream: any) => {
-            // Generate a NEW token for each request with IP/UA binding
-            const token = await generateStreamToken(
-              stream.playlist,
-              stream.headers || {},
-              req.ip,
-              req.get('user-agent'),
+            // Generate streaming token
+            const token = await generateStreamToken(stream.playlist, stream.headers || {}, ip, userAgent);
+
+            // Generate encrypted worker URL
+            const apiUrl = `${req.protocol}://${req.get('host')}/${token}`;
+            const workerUrl = process.env.WORKER_URL || 'http://localhost:8787';
+            const encryptedPath = encryptUrl(apiUrl);
+            const finalUrl = `${workerUrl}/${encryptedPath}`;
+
+            console.log(
+              `[CDN] Generated worker URL for ${sourceId}:`,
+              `\n  API: ${apiUrl}`,
+              `\n  Worker: ${finalUrl.substring(0, 100)}...`,
             );
             return {
               ...stream,
-              playlist: `${req.protocol}://${req.get('host')}/s/${token}`,
+              playlist: finalUrl,
               headers: {}, // Remove headers from response since proxy handles them
             };
           }),
@@ -313,7 +367,8 @@ app.get('/cdn', authMiddleware, scrapingLimiter, turnstileMiddleware, async (req
 });
 
 // Stream proxy endpoint (opaque token format) - PROTECTED
-app.get('/s/:token', validateDomain, async (req: Request, res: Response) => {
+// New flat URL structure: /:token (no /s/ prefix)
+app.get('/:token', validateTokenFormat, validateDomain, async (req: Request, res: Response) => {
   try {
     const { token } = req.params;
     const ip = req.ip || '';
@@ -351,8 +406,22 @@ app.get('/s/:token', validateDomain, async (req: Request, res: Response) => {
     const baseUrl = `${req.protocol}://${req.get('host')}`;
     const proxiedContent = await encryptPlaylistContent(content, baseUrl, token, metadata.url, ip, userAgent);
 
+    // Validate that no CDN URLs are exposed before sending
+    const isSecure = validatePlaylistSecurity(proxiedContent, `master-playlist:${token.substring(0, 8)}`);
+    if (!isSecure) {
+      console.error('[STREAM PROXY] CRITICAL: Blocked response with exposed URLs');
+      return res.status(500).send('Security validation failed');
+    }
+
+    // Return the playlist
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     res.send(proxiedContent);
   } catch (error: any) {
     console.error('[STREAM PROXY ERROR]', {
@@ -365,7 +434,8 @@ app.get('/s/:token', validateDomain, async (req: Request, res: Response) => {
 });
 
 // Segment proxy endpoint (opaque format) - PROTECTED with IP/UA binding and rate limiting
-app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, res: Response) => {
+// New flat URL structure: /:token/:segmentToken (no /s/ or /chunk/ prefix)
+app.get('/:token/:segmentToken', validateTokenFormat, validateDomain, async (req: Request, res: Response) => {
   try {
     const { token, segmentToken } = req.params;
     const ip = req.ip || '';
@@ -383,7 +453,6 @@ app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, re
       console.log(`[RATE LIMIT] Blocked ${ip} - ${rateLimitResult.reason}`);
       return res.status(429).send(rateLimitResult.reason || 'Too many requests');
     }
-
     // Validate master token
     const metadata = await getStreamMetadata(token, ip, userAgent);
 
@@ -422,8 +491,20 @@ app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, re
       const baseUrl = `${req.protocol}://${req.get('host')}`;
       const proxiedContent = await encryptPlaylistContent(content, baseUrl, token, segmentUrl, ip, userAgent);
 
+      // Validate that no CDN URLs are exposed before sending
+      const isSecure = validatePlaylistSecurity(proxiedContent, `variant-playlist:${token.substring(0, 8)}`);
+      if (!isSecure) {
+        console.error('[SEGMENT PROXY] CRITICAL: Blocked response with exposed URLs');
+        return res.status(500).send('Security validation failed');
+      }
+
+      // Return standard M3U8 playlist (no encryption for universal compatibility)
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
       res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.send(proxiedContent);
     } else {
       // This is an actual video segment, stream it with aggressive buffering headers
@@ -431,22 +512,31 @@ app.get('/s/:token/chunk/:segmentToken', validateDomain, async (req: Request, re
 
       res.setHeader('Content-Type', contentType || 'video/mp2t');
       res.setHeader('Access-Control-Allow-Origin', '*');
-
-      // Aggressive buffering headers
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // Cache for 1 year
-      res.setHeader('Accept-Ranges', 'bytes'); // Enable range requests
+      res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache forever
+      res.setHeader('Pragma', 'public');
+      res.setHeader('Expires', 'Thu, 01 Dec 2099 16:00:00 GMT');
 
       if (contentLength) {
         res.setHeader('Content-Length', contentLength);
       }
 
+      // Stream the response body
       if (response.body) {
-        Readable.fromWeb(response.body as any).pipe(res);
+        const stream = Readable.fromWeb(response.body as any);
+        stream.pipe(res);
+      } else {
+        res.end();
       }
     }
   } catch (error: any) {
-    console.error('Segment proxy error:', error);
-    res.status(500).send('Error');
+    console.error('[SEGMENT PROXY ERROR]', {
+      message: error.message,
+      stack: error.stack,
+    });
+
+    if (!res.headersSent) {
+      res.status(500).send('Proxy error');
+    }
   }
 });
 

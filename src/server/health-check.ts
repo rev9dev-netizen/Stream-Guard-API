@@ -6,10 +6,10 @@ import { saveProviderHealth } from './redis.js';
 
 const CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes
 const TEST_MEDIA = {
-  tmdbId: '19995', // Avatar
+  tmdbId: '550', // Fight Club
   type: 'movie',
-  title: 'Avatar',
-  year: '2009',
+  title: 'Fight Club',
+  year: '1999',
 };
 
 // Cache sources list

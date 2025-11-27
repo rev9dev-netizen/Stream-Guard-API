@@ -13,6 +13,7 @@ interface RateLimitData {
  */
 export class SegmentRateLimiter {
   private maxSegmentsPerMinute = 100000; // Effectively disabled (was 500)
+
   private maxBurstSegments = 10000; // Effectively disabled (was 100)
 
   private burstWindowMs = 5000; // 5 seconds
