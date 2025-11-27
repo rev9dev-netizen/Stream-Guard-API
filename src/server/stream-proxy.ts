@@ -96,7 +96,7 @@ export async function getStreamMetadata(
   // 2. Token expiration
   // 3. Rate limiting
   // 4. Domain validation
-  
+
   /* DISABLED - Causes issues with Cloudflare Worker proxy
   if (metadata.ip && ip) {
     const normalizedMetadataIp = normalizeLocalhost(metadata.ip);

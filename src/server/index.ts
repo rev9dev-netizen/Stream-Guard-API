@@ -32,16 +32,16 @@ app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json());
 
-// Rate limiting configuration
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.',
-  standardHeaders: true,
-  legacyHeaders: false,
-  // Skip rate limiting for localhost in development
-  skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1',
-});
+// // Rate limiting configuration
+// const apiLimiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 100, // Limit each IP to 100 requests per windowMs
+//   message: 'Too many requests from this IP, please try again later.',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   // Skip rate limiting for localhost in development
+//   skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1',
+// });
 
 // Aggressive rate limiting for scraping endpoint
 const scrapingLimiter = rateLimit({
@@ -63,7 +63,7 @@ const speedLimiter = slowDown({
 });
 
 // Apply rate limiting to all routes
-app.use(apiLimiter);
+// app.use(apiLimiter);
 app.use(speedLimiter);
 
 // Cloudflare headers validation (when behind Cloudflare)
