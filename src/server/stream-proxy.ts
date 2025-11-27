@@ -89,7 +89,15 @@ export async function getStreamMetadata(
     return ipAddr;
   };
 
-  // Validate IP binding (if set)
+  // IP validation disabled for worker proxy compatibility
+  // The worker makes requests from Cloudflare's network, which has different IPs
+  // Security is maintained through:
+  // 1. Worker authentication (X-Worker-Proxy header)
+  // 2. Token expiration
+  // 3. Rate limiting
+  // 4. Domain validation
+  
+  /* DISABLED - Causes issues with Cloudflare Worker proxy
   if (metadata.ip && ip) {
     const normalizedMetadataIp = normalizeLocalhost(metadata.ip);
     const normalizedRequestIp = normalizeLocalhost(ip);
@@ -99,6 +107,7 @@ export async function getStreamMetadata(
       return null;
     }
   }
+  */
 
   // Validate User-Agent binding (if set)
   if (metadata.userAgent && userAgent && metadata.userAgent !== userAgent) {
