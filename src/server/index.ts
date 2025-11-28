@@ -64,7 +64,7 @@ const speedLimiter = slowDown({
 
 // Apply rate limiting to all routes
 // app.use(apiLimiter);
-app.use(speedLimiter);
+// app.use(speedLimiter);
 
 // Cloudflare headers validation (when behind Cloudflare)
 const cloudflareValidation = (req: Request, res: Response, next: () => void) => {
@@ -220,7 +220,7 @@ app.get('/status', async (req: Request, res: Response) => {
 });
 
 // Get stream URL endpoint with aggressive rate limiting and Turnstile protection
-app.get('/cdn', authMiddleware, scrapingLimiter, turnstileMiddleware, async (req: Request, res: Response) => {
+app.get('/cdn', authMiddleware, turnstileMiddleware, async (req: Request, res: Response) => {
   const startTime = Date.now();
 
   try {
@@ -448,11 +448,12 @@ app.get('/:token/:segmentToken', validateTokenFormat, validateDomain, async (req
     }
 
     // Rate limit check
-    const rateLimitResult = await segmentRateLimiter.checkRateLimit(token, ip);
-    if (!rateLimitResult.allowed) {
-      console.log(`[RATE LIMIT] Blocked ${ip} - ${rateLimitResult.reason}`);
-      return res.status(429).send(rateLimitResult.reason || 'Too many requests');
-    }
+    // Rate limit check
+    // const rateLimitResult = await segmentRateLimiter.checkRateLimit(token, ip);
+    // if (!rateLimitResult.allowed) {
+    //   console.log(`[RATE LIMIT] Blocked ${ip} - ${rateLimitResult.reason}`);
+    //   return res.status(429).send(rateLimitResult.reason || 'Too many requests');
+    // }
     // Validate master token
     const metadata = await getStreamMetadata(token, ip, userAgent);
 
