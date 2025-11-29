@@ -10,7 +10,14 @@ export async function makeTMDBRequest(url: string, appendToResponse?: string): P
     accept: 'application/json',
   };
 
-  const requestURL = new URL(url);
+  // Use proxy URL if available, otherwise fallback to direct TMDB
+  const proxyUrl = process.env.WORKER_URL || 'https://tmdb-proxy.swasthikshetty101.workers.dev';
+
+  // Extract path from original URL
+  const originalUrlObj = new URL(url);
+  const path = originalUrlObj.pathname.replace('/3', ''); // Remove /3 prefix if present as proxy handles it
+
+  const requestURL = new URL(`${proxyUrl}${path}`);
   const key = getConfig().tmdbApiKey;
 
   // * JWT keys always start with ey and are ONLY valid as a header.

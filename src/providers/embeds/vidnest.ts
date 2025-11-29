@@ -1,15 +1,48 @@
+/* eslint-disable no-console */
 import { flags } from '@/entrypoint/utils/targets';
 import { makeEmbed } from '@/providers/base';
 import { HlsBasedStream } from '@/providers/streams';
 import { NotFoundError } from '@/utils/errors';
 import { createM3U8ProxyUrl } from '@/utils/proxy';
 
+const PASSPHRASE = 'T8c8PQlSQVU4mBuW4CbE/g57VBbM5009QHd+ym93aZZ5pEeVpToY6OdpYPvRMVYp';
+
+async function decryptAesGcm(encryptedB64: string, passphraseB64: string) {
+  const encryptedBytes = Buffer.from(encryptedB64, 'base64');
+  const keyBytes = Buffer.from(passphraseB64, 'base64').subarray(0, 32);
+  const iv = encryptedBytes.subarray(0, 12);
+  const data = encryptedBytes.subarray(12);
+
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+
+  const decrypted = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv,
+    },
+    key,
+    data,
+  );
+
+  return new TextDecoder().decode(decrypted);
+}
+
+async function fetchAndDecrypt(ctx: any, url: string) {
+  let data = await ctx.proxiedFetcher(url);
+  if (data.encrypted && data.data) {
+    const decrypted = await decryptAesGcm(data.data, PASSPHRASE);
+    data = JSON.parse(decrypted);
+  }
+  return data;
+}
+
 export const vidnestHollymoviehdEmbed = makeEmbed({
   id: 'vidnest-hollymoviehd',
   name: 'HollyMovie',
   rank: 104,
   async scrape(ctx) {
-    const serverStreams = await ctx.proxiedFetcher<any>(ctx.url);
+    const serverStreams = await fetchAndDecrypt(ctx, ctx.url);
+    console.log('HollyMovie Decrypted Data:', JSON.stringify(serverStreams, null, 2));
     if (!serverStreams.success || !serverStreams.sources) throw new NotFoundError('No streams found');
 
     const streams = [];
@@ -36,7 +69,7 @@ export const vidnestAllmoviesEmbed = makeEmbed({
   name: 'AllMovies (Hindi)',
   rank: 103,
   async scrape(ctx) {
-    const serverStreams = await ctx.proxiedFetcher<any>(ctx.url);
+    const serverStreams = await fetchAndDecrypt(ctx, ctx.url);
     if (!serverStreams.streams) throw new NotFoundError('No streams found');
 
     const streams = [];

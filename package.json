@@ -35,7 +35,7 @@
   },
   "homepage": "https://vidninja.github.io/providers/",
   "scripts": {
-    "build": "tsc && tsc-alias",
+    "build": "vite build",
     "build:fast": "node build.cjs",
     "dev": "tsc --watch",
     "start:server": "node dist/server.cjs",

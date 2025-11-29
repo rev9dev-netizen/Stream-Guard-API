@@ -7,6 +7,7 @@
     "esModuleInterop": true,
     "declaration": true,
     "outDir": "./lib",
+    "rootDir": "./src",
     "strict": true,
     "baseUrl": "src",
     "experimentalDecorators": true,
@@ -18,6 +19,6 @@
       "@entrypoint": ["./index.ts"]
     }
   },
-  "include": ["src", "vite.config.ts"],
+  "include": ["src"],
   "exclude": ["node_modules", "**/__test__"]
 }
