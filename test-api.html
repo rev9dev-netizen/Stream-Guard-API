@@ -421,19 +421,44 @@
             responseDiv.style.display = 'block';
             responseDiv.className = success ? 'response success' : 'response error';
             
-            // Show/hide play button and store URL
+            let html = `<h3>${success ? '✅ Success' : '❌ Error'}</h3>`;
+            
+            // Show individual play buttons for each stream
             if (success && data.stream && data.stream.length > 0) {
-                currentStreamUrl = data.stream[0].playlist;
-                playBtn.style.display = 'block';
+                html += '<div style="margin: 15px 0;">';
+                html += '<h4 style="margin-bottom: 10px; color: #aaa;">Available Streams:</h4>';
+                
+                data.stream.forEach((stream, index) => {
+                    const languageDisplay = stream.language ? ` [${stream.language.toUpperCase()}]` : '';
+                    const qualityDisplay = stream.quality ? ` • ${stream.quality}` : '';
+                    
+                    html += `
+                        <div style="margin-bottom: 10px; padding: 10px; background: #1a1a1a; border-radius: 4px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <strong>${stream.label || stream.id}</strong>${languageDisplay}
+                                    <div style="font-size: 11px; color: #666; margin-top: 4px;">
+                                        ${stream.type.toUpperCase()}${qualityDisplay} • ${stream.flags.join(', ')}
+                                    </div>
+                                </div>
+                                <button onclick="playStream('${stream.playlist}')" 
+                                        style="padding: 8px 16px; background: #28a745; border: none; border-radius: 4px; color: white; cursor: pointer; font-size: 14px;">
+                                    ▶ Play
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                playBtn.style.display = 'none'; // Hide the old play button
             } else {
                 currentStreamUrl = '';
                 playBtn.style.display = 'none';
             }
             
-            responseDiv.innerHTML = `
-                <h3>${success ? '✅ Success' : '❌ Error'}</h3>
-                <pre>${JSON.stringify(data, null, 2)}</pre>
-            `;
+            html += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            responseDiv.innerHTML = html;
         }
     </script>
 </body>

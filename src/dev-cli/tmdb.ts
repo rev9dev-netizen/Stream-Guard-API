@@ -10,8 +10,8 @@ export async function makeTMDBRequest(url: string, appendToResponse?: string): P
     accept: 'application/json',
   };
 
-  // Use proxy URL if available, otherwise fallback to direct TMDB
-  const proxyUrl = process.env.WORKER_URL || 'https://tmdb-proxy.swasthikshetty101.workers.dev';
+  // Use TMDB proxy URL if available, otherwise fallback to direct TMDB
+  const proxyUrl = process.env.TMDB_PROXY_URL || 'https://tmdb-proxy.swasthikshetty101.workers.dev';
 
   // Extract path from original URL
   const originalUrlObj = new URL(url);

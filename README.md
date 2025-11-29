@@ -11,6 +11,7 @@ A powerful Node.js Express API for scraping and streaming video content from mul
 - 🌐 **CORS Enabled** - Ready for cross-origin requests
 - 🎥 **Multi-Provider Support** - Scrapes from multiple video sources
 - 🔄 **Dynamic Source Loading** - Auto-discovers available providers
+- 🎯 **Combo Scrapers** - Single providers that return multiple streams (VidNest, etc.)
 - 🧪 **Built-in Test UI** - Interactive web interface for testing
 
 ## 🚀 Quick Start
@@ -98,20 +99,115 @@ curl -H "x-api-key: YOUR_API_KEY" \
 **Response:**
 ```json
 {
-  "source": "iron",
+  "source": "crystal",
   "stream": [
     {
-      "id": "iron-0",
+      "id": "crystal-allmovies-Hindi",
       "type": "hls",
-      "playlist": "http://localhost:3000/s/abc123def456...",
-      "headers": {},
-      "proxyDepth": 2,
-      "flags": [],
-      "captions": []
+      "playlist": "https://stream-guard-proxy.workers.dev/encrypted-url-here",
+      "flags": ["cors-allowed"],
+      "captions": [],
+      "preferredHeaders": {
+        "Referer": "https://example.com"
+      },
+      "language": "hi",
+      "label": "AllMovies (Hindi)",
+      "quality": "HD"
+    },
+    {
+      "id": "crystal-hollymoviehd-LS-25",
+      "type": "hls",
+      "playlist": "https://stream-guard-proxy.workers.dev/encrypted-url-here-2",
+      "flags": ["cors-allowed"],
+      "captions": [],
+      "language": "en",
+      "label": "HollyMovie (LS-25)",
+      "quality": "LS-25"
+    },
+    {
+      "id": "crystal-hollymoviehd-GS-25",
+      "type": "hls",
+      "playlist": "https://stream-guard-proxy.workers.dev/encrypted-url-here-3",
+      "flags": ["cors-allowed"],
+      "captions": [],
+      "language": "en",
+      "label": "HollyMovie (GS-25)",
+      "quality": "GS-25"
     }
   ],
   "embeds": []
 }
+```
+
+**Multiple Streams:**
+
+Some providers (like VidNest) are "combo scrapers" that return **multiple streams** from different upstream sources. This allows your frontend to:
+
+1. **Offer quality/language options** - Let users choose between different streams
+2. **Implement fallback logic** - Try another stream if one fails
+3. **Show multiple audio tracks** - Different languages from different sources
+
+**Stream Metadata Fields:**
+
+Each stream includes metadata to help frontends handle multiple options:
+
+- `language` (string) - ISO 639-1 language code (e.g., `"en"`, `"hi"`, `"ta"`, `"te"`, `"bn"`, `"ko"`, `"ja"`)
+  - Automatically detected from backend response
+  - Supports 50+ languages including Indian, Asian, European, and Middle Eastern languages
+  - Falls back to `"en"` (English) if language is not recognized
+- `label` (string) - Human-readable display name (e.g., `"AllMovies (Hindi)"`, `"HollyMovie (LS-25)"`)
+- `quality` (string) - Quality/server identifier (e.g., `"HD"`, `"LS-25"`, `"GS-25"`)
+
+**Frontend Implementation Example:**
+
+```javascript
+// Fetch streams
+const response = await fetch('/cdn?sourceId=crystal&tmdbId=550&type=movie', {
+  headers: { 'x-api-key': 'YOUR_API_KEY' }
+});
+const data = await response.json();
+
+// Group streams by language
+const streamsByLanguage = data.stream.reduce((acc, stream) => {
+  if (!acc[stream.language]) acc[stream.language] = [];
+  acc[stream.language].push(stream);
+  return acc;
+}, {});
+
+// Display language selector
+Object.entries(streamsByLanguage).forEach(([lang, streams]) => {
+  const langName = new Intl.DisplayNames(['en'], { type: 'language' }).of(lang);
+  console.log(`${langName}: ${streams.length} stream(s)`);
+  
+  streams.forEach(stream => {
+    // Create button with quality/server info
+    const button = document.createElement('button');
+    button.textContent = stream.label; // e.g., "HollyMovie (LS-25)"
+    button.onclick = () => playStream(stream.playlist);
+    document.body.appendChild(button);
+  });
+});
+
+// Automatic language selection based on user preference
+const userLang = navigator.language.split('-')[0]; // e.g., 'en' from 'en-US'
+const preferredStream = data.stream.find(s => s.language === userLang) || data.stream[0];
+playStream(preferredStream.playlist);
+```
+
+**Handling Multiple Audio Tracks:**
+
+For players that support multiple audio tracks (like HLS.js with alternate audio), you can:
+
+```javascript
+// Group by quality, keeping different languages as audio tracks
+const qualityGroups = {};
+data.stream.forEach(stream => {
+  const key = stream.quality;
+  if (!qualityGroups[key]) qualityGroups[key] = [];
+  qualityGroups[key].push(stream);
+});
+
+// Let user select quality, then map languages as audio tracks
 ```
 
 ### 2. List Available Sources
@@ -222,6 +318,52 @@ Benefits:
 - ✅ Single-use tokens (fresh for each request)
 - ✅ Time-limited access (1-hour TTL on segments)
 - ✅ No query parameters exposing real URLs
+
+## 🎯 Combo Scrapers
+
+### What are Combo Scrapers?
+
+Combo scrapers are providers that aggregate streams from **multiple upstream sources** in a single API call. Instead of returning just one stream, they fetch and decrypt streams from multiple servers, giving you more options.
+
+### Example: VidNest Provider
+
+VidNest is a combo scraper that returns streams from multiple servers:
+- **AllMovies** - Hindi/Indian content
+- **HollyMovie** - Hollywood content with different quality options
+
+**Single API Call:**
+```bash
+curl -H "x-api-key: YOUR_API_KEY" \
+  "http://localhost:3000/cdn?sourceId=crystal&tmdbId=550&type=movie"
+```
+
+**Returns Multiple Streams:**
+```json
+{
+  "stream": [
+    { "id": "crystal-allmovies-Hindi", "playlist": "..." },
+    { "id": "crystal-hollymoviehd-LS-25", "playlist": "..." },
+    { "id": "crystal-hollymoviehd-GS-25", "playlist": "..." }
+  ]
+}
+```
+
+### Benefits
+
+1. **Better Availability** - If one source fails, others are ready as fallback
+2. **Language Options** - Different sources may have different audio tracks
+3. **Quality Selection** - Multiple quality options from different CDNs
+4. **Single Request** - Get all options in one API call instead of multiple
+5. **Built-in Decryption** - All streams are automatically decrypted (AES-GCM)
+
+### How It Works
+
+1. Combo scraper fetches from all upstream sources in parallel
+2. Encrypted responses are decrypted using AES-GCM (Web Crypto API)
+3. All streams are collected and returned in a single response
+4. Each stream gets its own secure proxy URL
+5. Frontend can choose which stream to play
+
 
 ### Cloudflare Bypass
 

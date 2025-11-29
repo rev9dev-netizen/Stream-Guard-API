@@ -38,6 +38,70 @@ async function fetchAndDecrypt(ctx: any, url: string) {
   return data;
 }
 
+// Comprehensive language name to ISO 639-1 code mapper
+function getLanguageCode(languageName?: string): string {
+  if (!languageName) return 'en';
+
+  const name = languageName.toLowerCase().trim();
+  const languageMap: Record<string, string> = {
+    // Indian languages
+    hindi: 'hi',
+    tamil: 'ta',
+    telugu: 'te',
+    bengali: 'bn',
+    kannada: 'kn',
+    malayalam: 'ml',
+    marathi: 'mr',
+    gujarati: 'gu',
+    punjabi: 'pa',
+    urdu: 'ur',
+
+    // East Asian languages
+    korean: 'ko',
+    japanese: 'ja',
+    chinese: 'zh',
+    mandarin: 'zh',
+    cantonese: 'zh',
+    thai: 'th',
+    vietnamese: 'vi',
+    indonesian: 'id',
+    malay: 'ms',
+    filipino: 'fil',
+    tagalog: 'tl',
+
+    // European languages
+    english: 'en',
+    spanish: 'es',
+    french: 'fr',
+    german: 'de',
+    italian: 'it',
+    portuguese: 'pt',
+    russian: 'ru',
+    polish: 'pl',
+    dutch: 'nl',
+    swedish: 'sv',
+    norwegian: 'no',
+    danish: 'da',
+    finnish: 'fi',
+    greek: 'el',
+    turkish: 'tr',
+    czech: 'cs',
+    romanian: 'ro',
+    hungarian: 'hu',
+
+    // Middle Eastern languages
+    arabic: 'ar',
+    persian: 'fa',
+    farsi: 'fa',
+    hebrew: 'he',
+
+    // Other
+    swahili: 'sw',
+  };
+
+  return languageMap[name] || 'en'; // Default to English if not found
+}
+
 async function scrape(ctx: MovieScrapeContext | ShowScrapeContext, type: 'movie' | 'tv') {
   const embeds = [];
   const streams = [];
@@ -70,6 +134,10 @@ async function scrape(ctx: MovieScrapeContext | ShowScrapeContext, type: 'movie'
               playlist: source.file,
               flags: [flags.CORS_ALLOWED],
               captions: [],
+              // Metadata for frontend
+              language: 'en', // HollyMovie is English content
+              label: `HollyMovie (${source.label || 'HD'})`,
+              quality: source.label || 'HD',
             } as HlsBasedStream);
           }
         }
@@ -82,6 +150,10 @@ async function scrape(ctx: MovieScrapeContext | ShowScrapeContext, type: 'movie'
             flags: [flags.CORS_ALLOWED],
             captions: [],
             preferredHeaders: stream.headers,
+            // Metadata for frontend
+            language: getLanguageCode(stream.language),
+            label: `AllMovies (${stream.language || 'Unknown'})`,
+            quality: 'HD',
           } as HlsBasedStream);
         }
       }
