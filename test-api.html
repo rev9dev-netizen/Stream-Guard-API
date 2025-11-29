@@ -228,15 +228,16 @@
                 
                 const sources = await response.json();
                 
-                sourceSelect.innerHTML = sources
-                    .map(s => `<option value="${s.id}">${s.name} (${s.type}) - Rank: ${s.rank}</option>`)
+                let options = '<option value="">🎯 Auto-select (Best Source)</option>';
+                
+                options += sources
+                    .map(s => `<option value="${s.id}">${s.id} - Rank: ${s.rank}</option>`)
                     .join('');
                     
-                // Select cloudnestra by default if available
-                const cloudnestra = sources.find(s => s.id === 'cloudnestra');
-                if (cloudnestra) {
-                    sourceSelect.value = 'cloudnestra';
-                }
+                sourceSelect.innerHTML = options;
+                    
+                // Default to Auto-select
+                sourceSelect.value = "";
             } catch (error) {
                 sourceSelect.innerHTML = '<option value="">Failed to load sources</option>';
                 console.error('Error loading sources:', error);
@@ -267,16 +268,63 @@
                 if (hls) {
                     hls.destroy();
                 }
-                hls = new Hls();
+                
+                // Optimized HLS.js configuration for smoother playback
+                const config = {
+                    // Increase buffer sizes to prevent stalling
+                    maxBufferLength: 30,        // Buffer up to 30 seconds (default: 30)
+                    maxMaxBufferLength: 60,     // Maximum buffer size (default: 600)
+                    maxBufferSize: 60 * 1000 * 1000, // 60 MB buffer (default: 60MB)
+                    maxBufferHole: 0.5,         // Max hole in buffer (default: 0.5)
+                    
+                    // More aggressive loading
+                    lowBufferWatchdogPeriod: 0.5, // Check buffer every 0.5s (default: 0.5)
+                    highBufferWatchdogPeriod: 3,  // Check when buffer is good (default: 3)
+                    
+                    // Faster segment loading
+                    manifestLoadingTimeOut: 10000,    // 10s timeout
+                    manifestLoadingMaxRetry: 3,
+                    levelLoadingTimeOut: 10000,
+                    levelLoadingMaxRetry: 3,
+                    fragLoadingTimeOut: 20000,        // 20s timeout for segments
+                    fragLoadingMaxRetry: 6,
+                    
+                    // Enable debug logging for development
+                    debug: false, // Set to true to see detailed logs
+                };
+                
+                hls = new Hls(config);
                 hls.loadSource(streamUrl);
                 hls.attachMedia(video);
+                
                 hls.on(Hls.Events.MANIFEST_PARSED, function() {
                     video.play();
                 });
+                
                 hls.on(Hls.Events.ERROR, function(event, data) {
-                    console.error('HLS Error:', data);
+                    // Silently ignore non-fatal errors (buffer stalling, etc.)
+                    if (!data.fatal) {
+                        return;
+                    }
+                    
+                    // Handle fatal errors
+                    console.error('HLS Fatal Error:', data);
+                    
                     if (data.fatal) {
-                        alert('Failed to load stream: ' + data.type);
+                        switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                console.log('Network error, attempting to recover...');
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                console.log('Media error, attempting to recover...');
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                alert('Failed to load stream: ' + data.details);
+                                hls.destroy();
+                                break;
+                        }
                     }
                 });
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {

@@ -73,7 +73,7 @@ The server will start on `http://localhost:3000`
 **Authentication:** Required (API Key)
 
 **Query Parameters:**
-- `sourceId` (required) - Provider ID (e.g., `cloudnestra`, `lookmovie`)
+- `sourceId` (optional) - Provider Codename (e.g., `iron`, `alpha`) or leave empty for **Auto-select**
 - `tmdbId` (required) - TMDB ID of the content
 - `type` (required) - Media type: `movie` or `show`
 - `season` (optional) - Season number (for TV shows)
@@ -83,18 +83,25 @@ The server will start on `http://localhost:3000`
 **Headers:**
 - `x-api-key: YOUR_API_KEY` or use query param `?apiKey=YOUR_API_KEY`
 
-**Example Request:**
+**Example Request (Auto-select):**
 ```bash
 curl -H "x-api-key: YOUR_API_KEY" \
-  "http://localhost:3000/cdn?sourceId=cloudnestra&tmdbId=550&type=movie"
+  "http://localhost:3000/cdn?tmdbId=550&type=movie"
+```
+
+**Example Request (Specific Source):**
+```bash
+curl -H "x-api-key: YOUR_API_KEY" \
+  "http://localhost:3000/cdn?sourceId=iron&tmdbId=550&type=movie"
 ```
 
 **Response:**
 ```json
 {
+  "source": "iron",
   "stream": [
     {
-      "id": "vidsrc-cloudnestra-0",
+      "id": "iron-0",
       "type": "hls",
       "playlist": "http://localhost:3000/s/abc123def456...",
       "headers": {},

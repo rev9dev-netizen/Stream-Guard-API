@@ -1,4 +1,5 @@
 const TMDB_API_KEY = process.env.MOVIE_WEB_TMDB_API_KEY || process.env.TMDB_READ_API_KEY;
+const TMDB_PROXY_URL = process.env.TMDB_PROXY_URL || 'http://localhost:8788';
 
 export interface TmdbMetadata {
   title: string;
@@ -20,7 +21,8 @@ async function makeTmdbRequest(path: string, params: Record<string, string> = {}
     return null;
   }
 
-  const url = new URL(`https://api.themoviedb.org/3${path}`);
+  // Use worker proxy URL instead of direct TMDB
+  const url = new URL(`${TMDB_PROXY_URL}${path}`);
 
   // Handle Bearer token vs Query param
   const headers: Record<string, string> = {

@@ -93,7 +93,24 @@ export async function getProviderHealth(sourceId: string): Promise<any | null> {
   if (!redis) return null;
   try {
     const data = await redis.hget('provider:health', sourceId);
-    return data ? JSON.parse(data as string) : null;
+    
+    // Upstash Redis might return the object directly if it was stored as JSON
+    if (typeof data === 'object' && data !== null) {
+      return data;
+    }
+    
+    // If it's a string, try to parse it
+    if (typeof data === 'string') {
+      try {
+        return JSON.parse(data);
+      } catch (e) {
+        // If parsing fails, it might be double-encoded or invalid
+        console.warn(`Failed to parse health data for ${sourceId}:`, e);
+        return null;
+      }
+    }
+    
+    return null;
   } catch (error) {
     console.error('Redis health get error:', error);
     return null;

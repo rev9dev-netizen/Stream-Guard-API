@@ -4,14 +4,15 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 /* eslint-disable no-console */
 import express, { NextFunction, Request, Response } from 'express';
-import rateLimit from 'express-rate-limit';
-import slowDown from 'express-slow-down';
+// import rateLimit from 'express-rate-limit';
+// import slowDown from 'express-slow-down';
 
 import { getBuiltinEmbeds, getBuiltinExternalSources, getBuiltinSources } from '../index.js';
 import { startHealthCheckLoop } from './health-check.js';
 import { segmentRateLimiter } from './rate-limiter.js';
 import { generateCacheKey, getAllProviderHealth, getCachedStream, setCachedStream } from './redis.js';
 import { validatePlaylistSecurity } from './response-validator.js';
+import { anonymizeSourceId, resolveSourceId } from './source-codenames.js';
 import { updateProviderStats } from './stats.js';
 import { encryptPlaylistContent, generateStreamToken, getStreamMetadata } from './stream-proxy.js';
 import { turnstileMiddleware } from './turnstile.js';
@@ -44,23 +45,23 @@ app.use(express.json());
 // });
 
 // Aggressive rate limiting for scraping endpoint
-const scrapingLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 20, // Limit to 20 scraping requests per 5 minutes
-  message: 'Too many scraping requests, please slow down.',
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1',
-});
+// const scrapingLimiter = rateLimit({
+//   windowMs: 5 * 60 * 1000, // 5 minutes
+//   max: 20, // Limit to 20 scraping requests per 5 minutes
+//   message: 'Too many scraping requests, please slow down.',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1',
+// });
 
-// Speed limiter - slows down requests after threshold
-const speedLimiter = slowDown({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  delayAfter: 50, // Allow 50 requests per 15 minutes at full speed
-  delayMs: () => 500, // Fixed 500ms delay per request after threshold
-  maxDelayMs: 5000, // Maximum delay of 5 seconds
-  skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1',
-});
+// // Speed limiter - slows down requests after threshold
+// const speedLimiter = slowDown({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   delayAfter: 50, // Allow 50 requests per 15 minutes at full speed
+//   delayMs: () => 500, // Fixed 500ms delay per request after threshold
+//   maxDelayMs: 5000, // Maximum delay of 5 seconds
+//   skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1',
+// });
 
 // Apply rate limiting to all routes
 // app.use(apiLimiter);
@@ -92,21 +93,10 @@ const ALLOWED_DOMAINS = process.env.ALLOWED_DOMAINS
   ? process.env.ALLOWED_DOMAINS.split(',').map((d) => d.trim())
   : ['localhost:3000', 'localhost:3001']; // Default for development
 
-console.log('Allowed domains for stream access:', ALLOWED_DOMAINS);
-
 // Domain validation middleware for stream endpoints
 function validateDomain(req: Request, res: Response, next: () => void) {
-  // Debug logging
-  console.log('[VALIDATE_DOMAIN]', {
-    'X-Worker-Proxy': req.get('X-Worker-Proxy'),
-    referer: req.get('referer'),
-    origin: req.get('origin'),
-    host: req.get('host'),
-  });
-
   // Allow requests from Cloudflare Worker proxy
   if (req.get('X-Worker-Proxy') === 'stream-guard') {
-    console.log('[VALIDATE_DOMAIN] ✅ Worker proxy authenticated');
     return next();
   }
 
@@ -114,14 +104,12 @@ function validateDomain(req: Request, res: Response, next: () => void) {
   const host = req.get('host') || '';
 
   // 1. BLOCK Direct Access (No Referer)
-  // This prevents users from copying the URL and opening it in a new tab
   if (!referer) {
-    console.log(`[BLOCKED] Direct URL access attempt (No Referer) from IP: ${req.ip}`);
+    console.log(`[BLOCKED] Direct access from IP: ${req.ip}`);
     return res.status(403).send('Access denied: Direct access not allowed');
   }
 
-  // 2. Allow requests from the same host (e.g. your own frontend)
-  // This allows localhost:3000 -> localhost:3000
+  // 2. Allow requests from the same host
   if (referer.includes(host)) {
     return next();
   }
@@ -134,15 +122,9 @@ function validateDomain(req: Request, res: Response, next: () => void) {
   }
 
   // 4. Block everything else
-  console.log(`[BLOCKED] Unauthorized domain access from: ${referer}`);
+  console.log(`[BLOCKED] Unauthorized domain: ${referer}`);
   return res.status(403).send('Access denied: Domain not authorized');
 }
-
-// Request logging middleware
-app.use((req, res, next) => {
-  console.log(`[REQUEST] ${req.method} ${req.url}`);
-  next();
-});
 
 // Token validation middleware
 function validateTokenFormat(req: Request, res: Response, next: () => void) {
@@ -160,8 +142,6 @@ function validateTokenFormat(req: Request, res: Response, next: () => void) {
 app.get('/test', (req: Request, res: Response) => {
   res.sendFile('test-api.html', { root: process.cwd() });
 });
-
-// Load sources
 const sourceScrapers = [...getBuiltinSources(), ...getBuiltinExternalSources()].sort((a, b) => b.rank - a.rank);
 const embedScrapers = getBuiltinEmbeds().sort((a, b) => b.rank - a.rank);
 const sources = [...sourceScrapers, ...embedScrapers];
@@ -183,13 +163,18 @@ const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
 };
 
 app.get('/sources', authMiddleware, (req: Request, res: Response) => {
-  const sourceList = sources.map((source) => ({
-    id: source.id,
-    name: source.name,
-    rank: source.rank,
-    type: source.type,
-    mediaTypes: source.mediaTypes || [],
-  }));
+  const sourceList = sources
+    .filter((s) => s.type === 'source') // Only show sources, hide embeds
+    .map((source) => {
+      const codename = anonymizeSourceId(source.id);
+      return {
+        id: codename,
+        name: codename.charAt(0).toUpperCase() + codename.slice(1), // Use capitalized codename as name
+        rank: source.rank,
+        type: source.type,
+        mediaTypes: source.mediaTypes || [],
+      };
+    });
   res.json(sourceList);
 });
 
@@ -202,12 +187,13 @@ app.get('/status', async (req: Request, res: Response) => {
 
   // Add all source providers to the result
   for (const provider of sourceProviders) {
+    const codename = anonymizeSourceId(provider.id);
     if (healthData[provider.id]) {
       // Provider has been tested
-      result[provider.id] = healthData[provider.id];
+      result[codename] = healthData[provider.id];
     } else {
       // Provider hasn't been tested yet
-      result[provider.id] = {
+      result[codename] = {
         status: 'untested',
         latency: 0,
         lastChecked: 0,
@@ -226,11 +212,18 @@ app.get('/cdn', authMiddleware, turnstileMiddleware, async (req: Request, res: R
   try {
     const { sourceId, tmdbId, type, season, episode, url, force } = req.query;
 
-    if (!sourceId) {
-      return res.status(400).json({ error: 'Missing sourceId' });
+    if (!tmdbId) {
+      return res.status(400).json({ error: 'Missing tmdbId' });
     }
 
-    const sId = String(sourceId);
+    // Resolve source ID (codename → real ID, or auto-select)
+    const resolvedSourceId = resolveSourceId(String(sourceId || ''), sources);
+
+    if (!resolvedSourceId) {
+      return res.status(400).json({ error: 'Invalid source or no sources available' });
+    }
+
+    const sId = resolvedSourceId;
     const tId = String(tmdbId || '');
     const mType = String(type || 'movie');
     const sSeason = String(season || '0');
@@ -242,7 +235,6 @@ app.get('/cdn', authMiddleware, turnstileMiddleware, async (req: Request, res: R
     if (force !== 'true') {
       const cached = await getCachedStream(cacheKey);
       if (cached) {
-        console.log(`[Cache Hit] ${cacheKey}`);
         const responseTime = Date.now() - startTime;
         updateProviderStats(sId, true, responseTime);
 
@@ -252,8 +244,9 @@ app.get('/cdn', authMiddleware, turnstileMiddleware, async (req: Request, res: R
         // Generate FRESH tokens even for cached results
         const proxiedResult = {
           ...cached,
+          source: anonymizeSourceId(sId), // Anonymize source in response
           stream: await Promise.all(
-            (cached.stream || []).map(async (stream: any) => {
+            (cached.stream || []).map(async (stream: any, index: number) => {
               // Generate streaming token
               const token = await generateStreamToken(stream.playlist, stream.headers || {}, ip, userAgent);
 
@@ -263,13 +256,9 @@ app.get('/cdn', authMiddleware, turnstileMiddleware, async (req: Request, res: R
               const encryptedPath = encryptUrl(apiUrl);
               const finalUrl = `${workerUrl}/${encryptedPath}`;
 
-              console.log(
-                `[CDN] Generated worker URL for ${sourceId}:`,
-                `\n  API: ${apiUrl}`,
-                `\n  Worker: ${finalUrl.substring(0, 100)}...`,
-              );
               return {
                 ...stream,
+                id: `${anonymizeSourceId(sId)}-${index}`, // Anonymize ID
                 playlist: finalUrl,
                 headers: {},
               };
@@ -280,8 +269,6 @@ app.get('/cdn', authMiddleware, turnstileMiddleware, async (req: Request, res: R
         return res.json(proxiedResult);
       }
     }
-
-    console.log(`[Scraping] ${sId} - ${mType} ${tId}`);
 
     // Prepare options for scraper
     const options = {
@@ -301,12 +288,16 @@ app.get('/cdn', authMiddleware, turnstileMiddleware, async (req: Request, res: R
 
     if (result) {
       // Fetch metadata from TMDB
-      const { getMediaMetadata } = await import('./tmdb');
+      const { getMediaMetadata } = await import('./tmdb.js');
       const metadata = await getMediaMetadata(tId, mType as 'movie' | 'show', sSeason, sEpisode);
 
-      // Cache the RAW result with metadata
+      // Cache the RAW result with metadata and codename mapping
       const cacheData = {
         ...result,
+        _sourceMapping: {
+          realId: sId,
+          codename: anonymizeSourceId(sId),
+        },
         metadata: metadata
           ? {
               ...metadata,
@@ -326,8 +317,9 @@ app.get('/cdn', authMiddleware, turnstileMiddleware, async (req: Request, res: R
       // Generate FRESH tokens for this request (even if from cache)
       const proxiedResult = {
         ...result,
+        source: anonymizeSourceId(sId), // Anonymize source in response
         stream: await Promise.all(
-          (result.stream || []).map(async (stream: any) => {
+          (result.stream || []).map(async (stream: any, index: number) => {
             // Generate streaming token
             const token = await generateStreamToken(stream.playlist, stream.headers || {}, ip, userAgent);
 
@@ -337,13 +329,9 @@ app.get('/cdn', authMiddleware, turnstileMiddleware, async (req: Request, res: R
             const encryptedPath = encryptUrl(apiUrl);
             const finalUrl = `${workerUrl}/${encryptedPath}`;
 
-            console.log(
-              `[CDN] Generated worker URL for ${sourceId}:`,
-              `\n  API: ${apiUrl}`,
-              `\n  Worker: ${finalUrl.substring(0, 100)}...`,
-            );
             return {
               ...stream,
+              id: `${anonymizeSourceId(sId)}-${index}`, // Anonymize ID
               playlist: finalUrl,
               headers: {}, // Remove headers from response since proxy handles them
             };
@@ -391,14 +379,11 @@ app.get('/:token', validateTokenFormat, validateDomain, async (req: Request, res
 
     const content = await response.text();
 
-    console.log('[STREAM PROXY] Original playlist URL:', metadata.url);
-    console.log('[STREAM PROXY] Original playlist length:', content.length);
-
     // Extract available qualities from master playlist
     const qualityRegex = /RESOLUTION=(\d+x\d+)/g;
     const qualities = Array.from(content.matchAll(qualityRegex)).map((m) => m[1]);
     if (qualities.length > 0) {
-      console.log('[STREAM PROXY] Available qualities:', qualities.join(', '));
+      // console.log('[STREAM PROXY] Available qualities:', qualities.join(', ')); // Removed
     }
 
     // Process the playlist to replace URLs with proxied versions

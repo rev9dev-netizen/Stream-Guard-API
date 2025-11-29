@@ -1,0 +1,14 @@
+{
+  "name": "stream-guard-proxy",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for Stream Guard API proxy",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "wrangler": "^3.86.1"
+  }
+}

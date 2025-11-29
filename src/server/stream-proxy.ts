@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable no-console */
 import crypto from 'crypto';
 import zlib from 'zlib';
@@ -181,9 +182,6 @@ export async function encryptPlaylistContent(
   const segmentMapping: Record<string, string> = {};
   const expiresAt = Date.now() + 4 * 60 * 60 * 1000; // 4 hours
 
-  console.log(`[PLAYLIST ENCRYPTION] Processing playlist from: ${originalUrl.substring(0, 100)}`);
-  console.log(`[PLAYLIST ENCRYPTION] Total lines: ${lines.length}`);
-
   // First pass: Process lines and collect all segments
   const processedLines = await Promise.all(
     lines.map(async (line) => {
@@ -205,8 +203,6 @@ export async function encryptPlaylistContent(
               fullUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${pathParts.join('/')}/${uri}`;
             }
           }
-
-          console.log(`[PLAYLIST ENCRYPTION] Encrypting URI attribute: ${fullUrl.substring(0, 80)}...`);
 
           // Generate encrypted payload
           const { shortId, encryptedData } = await generateEncryptedSegmentPayload(fullUrl, expiresAt, token);
@@ -241,8 +237,6 @@ export async function encryptPlaylistContent(
         }
       }
 
-      console.log(`[PLAYLIST ENCRYPTION] Encrypting segment: ${fullUrl.substring(0, 80)}...`);
-
       // Generate encrypted payload (but don't save to Redis yet)
       const { shortId, encryptedData } = await generateEncryptedSegmentPayload(fullUrl, expiresAt, token);
 
@@ -259,9 +253,6 @@ export async function encryptPlaylistContent(
   await setBatchStreamSegments(token, segmentMapping, ttl);
 
   const result = processedLines.join('\n');
-
-  console.log(`[PLAYLIST ENCRYPTION] Encrypted ${Object.keys(segmentMapping).length} segments`);
-  console.log(`[PLAYLIST ENCRYPTION] Output length: ${result.length} bytes`);
 
   // Validate that no CDN URLs are exposed
   const { validatePlaylistSecurity } = await import('./response-validator');
